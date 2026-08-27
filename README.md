@@ -42,7 +42,7 @@ Distributed under the GNU Affero General Public License v3.0 (AGPLv3). See the L
 ## 💻 System Requirements
 SovNode runs entirely on your local machine using Ollama for inference. To ensure a smooth experience with local AI workloads, your system should meet the following specifications:
 
-# Minimum Requirements
+### Minimum Requirements
 OS: Windows 10/11 (64-bit)
 
 CPU: 4-core processor with AVX2
@@ -53,7 +53,7 @@ GPU: 4 GB VRAM
 
 Storage: 15 GB free space (for Ollama binaries, AI models, and application data)
 
-# Recommended Requirements
+### Recommended Requirements
 OS: Windows 10/11 (64-bit)
 
 CPU: Modern 6-core or 8-core CPU
