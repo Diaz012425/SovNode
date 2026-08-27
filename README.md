@@ -21,13 +21,16 @@
 
 * **OS:** Windows 10 / 11 (64-bit)
 * **Backend:** Ollama running locally (`localhost:11434`)
+SovNode requires **Ollama** installed and running locally (`localhost:11434`). Pull the required models before launching:
+
+```
+ollama pull gpt-oss:20b
+ollama pull qwen2.5:0.5b
+```
 
 ## 📄 License
 
 Distributed under the GNU Affero General Public License v3.0 (AGPLv3). See the LICENSE file for more details.
-
-## System Requirements
-SovNode runs entirely on your local machine using Ollama for inference. To ensure a smooth experience with local AI workloads, your system should meet the following specifications:
 
 ## Minimum Requirements
 OS: Windows 10/11 (64-bit).
