@@ -16,6 +16,13 @@
 2. Go to the **[Releases](../../releases)** tab of this repository.
 3. Download the latest **`SovNode.zip`** package.
 4. Extract the contents and run **`SovNode.exe`**. No installation or Python setup required!
+   
+To run from source:
+```
+git clone [https://github.com/drastico01/SovNode.git](https://github.com/drastico01/SovNode.git)
+cd SovNode
+python sovnode_qt.py
+```
 
 ## ⚙️ System Requirements
 
@@ -54,4 +61,4 @@ Dedicated GPU with 8 GB+ VRAM
 
 Storage: 25 GB free SSD space
 
-Note on Performance: SovNode performance depends heavily on your local hardware. While the application's interface is lightweight (built with PyQt6), the speed of AI responses is determined by your CPU/GPU capability. An NVIDIA GPU with CUDA support will provide the optimal inference speed for complex code generation tasks.
+Note: SovNode performance depends heavily on local hardware capability. A dedicated GPU with VRAM/CUDA support provides optimal speed.
