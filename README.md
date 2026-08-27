@@ -39,7 +39,7 @@ ollama pull qwen2.5:0.5b
 
 Distributed under the GNU Affero General Public License v3.0 (AGPLv3). See the LICENSE file for more details.
 
-💻 System Requirements
+## 💻 System Requirements
 SovNode runs entirely on your local machine using Ollama for inference. To ensure a smooth experience with local AI workloads, your system should meet the following specifications:
 
 Minimum Requirements
