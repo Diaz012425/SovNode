@@ -24,7 +24,7 @@ cd SovNode
 python sovnode_qt.py
 ```
 
-## ⚙️ System Requirements
+## ⚙️ Model Setup (Ollama)
 
 * **OS:** Windows 10 / 11 (64-bit)
 * **Backend:** Ollama running locally (`localhost:11434`)
@@ -39,8 +39,11 @@ ollama pull qwen2.5:0.5b
 
 Distributed under the GNU Affero General Public License v3.0 (AGPLv3). See the LICENSE file for more details.
 
-## Minimum Requirements
-OS: Windows 10/11 (64-bit).
+💻 System Requirements
+SovNode runs entirely on your local machine using Ollama for inference. To ensure a smooth experience with local AI workloads, your system should meet the following specifications:
+
+Minimum Requirements
+OS: Windows 10/11 (64-bit)
 
 CPU: 4-core processor with AVX2
 
@@ -48,17 +51,17 @@ RAM: 16 GB
 
 GPU: 4 GB VRAM
 
-Storage: 15 GB free space (for Ollama binaries, AI models, and application data).
+Storage: 15 GB free space (for Ollama binaries, AI models, and application data)
 
-## Recommended Requirements
-OS: Windows 10/11 (64-bit).
+Recommended Requirements
+OS: Windows 10/11 (64-bit)
 
 CPU: Modern 6-core or 8-core CPU
 
 RAM: 16 GB+
 
-Dedicated GPU with 8 GB+ VRAM
+GPU: Dedicated GPU with 8 GB+ VRAM
 
 Storage: 25 GB free SSD space
 
-Note: SovNode performance depends heavily on local hardware capability. A dedicated GPU with VRAM/CUDA support provides optimal speed.
+Note on Performance: SovNode performance depends heavily on local hardware capability. While the application's interface is lightweight (built with PyQt6), the speed of AI responses is determined by your CPU/GPU capability. A dedicated GPU with VRAM/CUDA support will provide optimal inference speed.
