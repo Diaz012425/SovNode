@@ -88,15 +88,7 @@ _GENERIC_CONTEXT_WORDS: frozenset = frozenset({
 })
 
 
-# Nota (medido): `_GENERIC_CONTEXT_WORDS` solo cubre jerga
-# futbolística ("final", "score", "team"...), no palabras funcionales
-# comunes. Sin este filtro, dos contextos de marcador SIN NINGÚN
-# participante en común (p. ej. un partido de 1966 y otro de 1970) podían
-# considerarse "el mismo evento" solo porque ambos contienen "the" - un
-# `frozenset({"the"})` no identifica absolutamente nada, pero superaba el
-# chequeo `words_a & words_b` de `contexts_describe_same_event()` igual
-# que un nombre de equipo real. Turno real capturado: grupo de
-# contradicción con "teams": {"the"}.
+
 _STOPWORDS: frozenset = frozenset({
     "the", "and", "for", "are", "was", "were", "with", "that", "this",
     "from", "have", "has", "had", "not", "but", "you", "your", "they",
@@ -230,22 +222,7 @@ def is_topically_relevant(query: str, text: str) -> bool:
     if not shared:
         return False
 
-    # Nota (medido - "Real Madrid recent signing" traía
-    # "La Liga"/"Atlético Madrid"/"El Clásico" como fuentes): compartir
-    # ÚNICAMENTE el nombre (completo o parcial) de una entidad compuesta
-    # de la consulta ("real"+"madrid", ambos parte de "Real Madrid") no
-    # es evidencia de que el texto trate lo que se pregunta SOBRE esa
-    # entidad - cualquier artículo relacionado con el club menciona su
-    # nombre sin necesariamente hablar de un fichaje reciente.
-    #
-    # Solo rechaza cuando la consulta pide algo SUSTANTIVO más allá de
-    # la entidad - se descarta explícitamente el resto de palabras
-    # genéricas/de dominio (`_GENERIC_CONTEXT_WORDS`, p. ej. "final") al
-    # decidir si "hay algo más que exigir". Sin este descarte, una
-    # consulta como "Argentina France final" (dos países consecutivos
-    # con mayúscula, detectados como una sola entidad) rechazaría de
-    # más una fuente que sí es sobre esa final pero cuyo fragmento no
-    # repite literalmente la palabra "final".
+  
     entity_groups = _entity_phrase_word_groups(query)
     entity_only_overlap = any(shared and shared <= group for group in entity_groups)
     if entity_only_overlap and (query_words - shared - _GENERIC_CONTEXT_WORDS):
