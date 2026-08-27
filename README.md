@@ -32,21 +32,23 @@ SovNode runs entirely on your local machine using Ollama for inference. To ensur
 ## Minimum Requirements
 OS: Windows 10/11 (64-bit).
 
-CPU: 4-core processor with AVX2 instruction support.
+CPU: 4-core processor with AVX2
 
-RAM: 8 GB (required to handle the AI model and the SovNode UI simultaneously).
+RAM: 16 GB
 
-Storage: 10 GB free space (for Ollama binaries, AI models, and application data).
+GPU: 4 GB VRAM
+
+Storage: 15 GB free space (for Ollama binaries, AI models, and application data).
 
 ## Recommended Requirements
 OS: Windows 10/11 (64-bit).
 
-CPU: Modern 6-core processor or better.
+CPU: Modern 6-core or 8-core CPU
 
-RAM: 16 GB or higher.
+RAM: 16 GB+
 
-GPU: Dedicated NVIDIA or AMD GPU with at least 4 GB VRAM (highly recommended for significantly faster code generation and inference).
+Dedicated GPU with 8 GB+ VRAM
 
-Storage: SSD (highly recommended to improve application responsiveness and reduce AI model loading times).
+Storage: 25 GB free SSD space
 
 Note on Performance: SovNode performance depends heavily on your local hardware. While the application's interface is lightweight (built with PyQt6), the speed of AI responses is determined by your CPU/GPU capability. An NVIDIA GPU with CUDA support will provide the optimal inference speed for complex code generation tasks.
