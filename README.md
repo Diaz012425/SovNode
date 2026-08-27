@@ -4,11 +4,11 @@
 
 ## 🚀 Key Features
 
-* **100% Offline-First:** Operates completely on your local machine with zero telemetry or cloud dependency.
-* **Modern Desktop UI:** Clean, responsive PyQt6 interface with a custom dark theme.
-* **Interactive Command Console:** Supports multi-turn conversations and built-in shortcuts (`/resumir`, `/depurar`, `/traducir`, `/optimizar`).
-* **Drag-and-Drop Support:** Easily load and analyze text or code files (`.py`, `.txt`, `.md`, `.json`, `.csv`) directly in the workspace.
-* **Reliable Persistence:** Features local write-ahead logging (WAL) to maintain session state securely.
+* **100% Offline & Private:** Operates entirely on your local machine with zero telemetry or external API calls.
+* **Single-Model MoE Architecture:** Powered by `gpt-oss:20b` for unified general reasoning and code generation, optimized with Harmony protocol budgeting (`think: "low"`).
+* **Instant Intent Routing:** Offloads quick queries to a lightweight `qwen2.5:0.5b` standalone router.
+* **Modern PyQt6 UI:** Clean dark desktop interface with real-time streaming, LaTeX math rendering, and persistent session memory (WAL).
+* **Dynamic Tool Engine:** Extensible tool engine with local file inspection, execution guardrails, and sandboxed workflows.
 
 ## 📥 Installation & Usage
 
@@ -24,10 +24,7 @@
 
 ## 📄 License
 
-Copyright © Stephen Noé Diaz Mendez. All rights reserved. 
-This software is proprietary. Unauthorized copying, modification, or distribution of its compiled binaries or source code is strictly prohibited.
-
-Here is a clean, professional "System Requirements" block formatted in Markdown, ready for you to copy and paste directly into your README.md file.
+Distributed under the GNU Affero General Public License v3.0 (AGPLv3). See the LICENSE file for more details.
 
 ## System Requirements
 SovNode runs entirely on your local machine using Ollama for inference. To ensure a smooth experience with local AI workloads, your system should meet the following specifications:
