@@ -4,7 +4,7 @@
 
 ## 🚀 Key Features
 
-* **100% Offline & Private:** Operates entirely on your local machine with zero telemetry or external API calls.
+* **Local-First & Private Inference:** LLM inference runs 100% locally via Ollama for total data sovereignty, supporting optional hybrid web grounding when retrieval workflows require live facts.
 * **Single-Model MoE Architecture:** Powered by `gpt-oss:20b` for unified general reasoning and code generation, optimized with Harmony protocol budgeting (`think: "low"`).
 * **Instant Intent Routing:** Offloads quick queries to a lightweight `qwen2.5:0.5b` standalone router.
 * **Modern PyQt6 UI:** Clean dark desktop interface with real-time streaming, LaTeX math rendering, and persistent session memory (WAL).
