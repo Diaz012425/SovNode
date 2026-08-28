@@ -18,10 +18,12 @@
 4. Extract the contents and run **`SovNode.exe`**. No installation or Python setup required!
    
 To run from source:
+
 ```
-git clone [https://github.com/drastico01/SovNode.git](https://github.com/drastico01/SovNode.git)
+git clone [https://github.com/Diaz01245/SovNode.git](https://github.com/Diaz01245/SovNode.git)
 cd SovNode
-python sovnode_qt.py
+pip install -r requirements.txt
+python app.py
 ```
 
 ## ⚙️ Model Setup (Ollama)
