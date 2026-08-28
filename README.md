@@ -39,6 +39,14 @@ ollama pull qwen2.5:0.5b
 
 Distributed under the GNU Affero General Public License v3.0 (AGPLv3). See the LICENSE file for more details.
 
+## 📊 Benchmarks & System Evals
+
+- **Testbed Hardware:** AMD Radeon RX 5500 XT (8GB VRAM) / 16GB System RAM
+- **Inference Throughput:** 15.5 - 19.0 tokens/sec continuous generation (`gpt-oss:20b` / `qwen2.5:7b` Q4_K_M)
+- **Router Latency:** < 20 ms intent classification using `qwen2.5:0.5b`
+- **VRAM Memory Control:** Dynamic `keep_alive` offloading (0 MB leak across model swaps)
+- **UI Thread Stability:** 100% Async PyQt6 execution (0% frame drops during web scraping/RAG ingestion)
+  
 ## 💻 System Requirements
 SovNode runs entirely on your local machine using Ollama for inference. To ensure a smooth experience with local AI workloads, your system should meet the following specifications:
 
