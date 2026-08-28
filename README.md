@@ -77,7 +77,6 @@ Storage: 25 GB free SSD space
 <p align="center">
   <img src="docs/showcaseSovnode1.gif" width="800" alt="SovNode Interface Demo">
   <br>
-  <em>Figura 1: Interfaz principal con tema Cyberpunk Dark y consola de telemetría en tiempo real.</em>
 </p>
 
 <br>
@@ -85,7 +84,6 @@ Storage: 25 GB free SSD space
 <p align="center">
   <img src="docs/showcaseSovnode2.gif" width="800" alt="SovNode Terminal Telemetry Demo">
   <br>
-  <em>Figura 2: Flujo de ejecución local y métricas de rendimiento de tokens por segundo.</em>
 </p>
 
 Note on Performance: SovNode performance depends heavily on local hardware capability. While the application's interface is lightweight (built with PyQt6), the speed of AI responses is determined by your CPU/GPU capability. A dedicated GPU with VRAM/CUDA support will provide optimal inference speed.
