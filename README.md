@@ -63,14 +63,14 @@ Most AI assistants ask you to trust a company with your prompts, your files, and
 
 <p align="center">
   <img src="docs/showcaseSovnode3.gif" width="800" alt="SovNode Web Search">
-  <br><em>Streaming chat, routing, and tool calls</em>
+  <br><em>SovNode Web Search</em>
 </p>
 
 <br>
 
 <p align="center">
   <img src="docs/showcaseSovnode4.gif" width="800" alt="SovNode LaTeX syntax">
-  <br><em>Live system console / telemetry</em>
+  <br><em>SovNode LaTeX syntax</em>
 </p>
 
 ## 🚀 Getting Started
