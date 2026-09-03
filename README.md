@@ -3,7 +3,7 @@
 ### Sovereign AI Node — a private, 100% offline AI workstation for your desktop
 
 <p align="center">
-  <img src="docs/showcaseSovnode1.gif" width="800" alt="SovNode interface demo">
+  <img src="docs/showcaseSovnode5.gif" width="800" alt="SovNode interface demo">
 </p>
 
 <p align="center">
@@ -62,14 +62,14 @@ Most AI assistants ask you to trust a company with your prompts, your files, and
 ## 🖼 Demo
 
 <p align="center">
-  <img src="docs/showcaseSovnode1.gif" width="800" alt="SovNode Interface Demo">
+  <img src="docs/showcaseSovnode3.gif" width="800" alt="SovNode Web Search">
   <br><em>Streaming chat, routing, and tool calls</em>
 </p>
 
 <br>
 
 <p align="center">
-  <img src="docs/showcaseSovnode2.gif" width="800" alt="SovNode Terminal Telemetry Demo">
+  <img src="docs/showcaseSovnode4.gif" width="800" alt="SovNode LaTeX syntax">
   <br><em>Live system console / telemetry</em>
 </p>
 
