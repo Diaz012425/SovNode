@@ -142,8 +142,7 @@ SovNode/
 ├── modelfile                 # Ollama Modelfile (optional model customization)
 ├── requirements.txt           # Python dependencies
 ├── LICENSE                     # AGPLv3 full text
-├── README.md                    # You are here
-├── ARCHITECTURE.md                # Deep-dive module map for contributors
+├── README.md                    # You are here             
 ├── logo.ico / src/logo.ico / src/logo.png
 ├── assets/fonts/                   # Bundled Inter font (OFL license)
 ├── docs/                            # Demo GIFs used in this README
@@ -196,10 +195,6 @@ Measured on the reference testbed below — actual throughput depends heavily on
 ## 🌐 Localization
 
 The interface and assistant responses are available in **Spanish** and **English**, switchable from the UI at any time.
-
-## 🤝 Contributing
-
-Issues and pull requests are welcome. If you're proposing a larger change, please open an issue first to discuss the approach. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for a module-by-module map of the codebase before diving in.
 
 ## 📄 License
 
