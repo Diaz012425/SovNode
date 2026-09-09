@@ -1,0 +1,49 @@
+# SovNode — dependencias de Python
+# Generado a partir de un escaneo real de los imports en src/, tests/, app.py
+# y build.py (no es una lista aspiracional). Probado en Windows 10/11 x64
+# con Python 3.11+.
+
+# --- UI de escritorio (cliente principal) ---
+PyQt6
+
+# --- UI alternativa (más liviana, basada en navegador) ---
+streamlit
+
+# --- Backend / red ---
+requests
+
+# --- Memoria híbrida: RAG vectorial + embeddings locales ---
+numpy
+faiss-cpu
+fastembed
+
+# --- Motor simbólico (CAS) para verificación algebraica y descubrimiento de fórmulas ---
+sympy
+
+# --- Búsqueda web (multi-fuente) ---
+ddgs               # antes "duckduckgo-search"; el código intenta ambos nombres
+trafilatura        # limpieza de HTML a texto plano para el scraping de artículos
+
+# --- Voz: entrada (STT) y salida (TTS) ---
+faster-whisper
+sounddevice
+pyttsx3
+
+# --- Corrección ortográfica ---
+pyspellchecker
+
+# --- Renderizado de LaTeX/matemática en la UI ---
+matplotlib
+
+# --- Telemetría de sistema (VRAM/CPU/RAM en el panel de métricas) ---
+psutil
+
+# --- Esqueletos locales de juegos clásicos (Palanca de rendimiento 1) ---
+pygame
+
+# --- Integración con voces SAPI5 de Windows (usada por pyttsx3 en Windows) ---
+pywin32; sys_platform == "win32"
+
+# --- Empaquetado del ejecutable Windows (build.py / SovNode.spec) ---
+# Solo hace falta para generar el .exe, no para correr SovNode desde código.
+pyinstaller
