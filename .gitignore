@@ -1,0 +1,42 @@
+# Generado automaticamente por "Crear carpeta limpia para GitHub.bat"
+__pycache__/
+.git/
+.claude/
+.vscode/
+.idea/
+venv/
+.venv/
+env/
+ENV/
+build/
+dist/
+_backups/
+_to_delete/
+Claude outputs/
+sovnode_patch/
+
+# Sandbox del LLM: se versiona la carpeta pero no su contenido generado
+workspace/*
+workspace/.gitkeep
+
+*.pyc
+*.pyo
+*$py.class
+*.so
+*.zip
+*.exe
+*.db
+*.db-journal
+*.wal
+*.faiss
+*.meta.json
+*.log
+*.tmp
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+*.bak*
+
+*.db-shm
+*.db-wal
