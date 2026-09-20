@@ -99,7 +99,7 @@ Most AI assistants ask you to trust a company with your prompts, your files, and
 ### Option B — Run from source
 
 ```bash
-git clone https://github.com/Diaz01245/SovNode.git
+git clone https://github.com/Diaz012425/SovNode.git
 cd SovNode
 pip install -r requirements.txt
 ```
