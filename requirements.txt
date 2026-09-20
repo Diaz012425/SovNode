@@ -1,0 +1,51 @@
+# SovNode -- dependencias para correr desde codigo fuente (Opcion B del README).
+# Generado a partir de un escaneo real de los imports en src/ y app.py
+# (no es una lista generica -- cada paquete de aca abajo se usa de verdad).
+#
+# Python 3.11 (ver README / badge de la parte de arriba).
+# Requiere ademas Ollama instalado y corriendo por separado (no es un
+# paquete de pip): https://ollama.com
+
+# --- UI ---
+PyQt6>=6.4
+
+# --- Motor local (Ollama) y HTTP (incluye las llamadas "raw" al motor
+# Cloud opcional -- Gemini/Anthropic -- que se hacen via requests, sin
+# SDK propio) ---
+requests>=2.31
+
+# --- Memoria / RAG ---
+faiss-cpu>=1.7.4
+fastembed>=0.2
+numpy>=1.24
+
+# --- Busqueda web (fallback de nombre de paquete: el codigo intenta
+# "ddgs" primero y cae a "duckduckgo_search" si no esta -- con instalar
+# ddgs alcanza) ---
+ddgs>=6.0
+trafilatura>=1.8
+
+# --- Voz (STT/TTS local) ---
+faster-whisper>=1.0
+pyttsx3>=2.90
+sounddevice>=0.4
+
+# --- OCR / vision ---
+rapidocr-onnxruntime>=1.3
+Pillow>=10.0
+
+# --- Matematicas / graficos / juegos generados por el LLM en el sandbox ---
+sympy>=1.12
+matplotlib>=3.8
+pygame>=2.5
+
+# --- Utilidades ---
+psutil>=5.9
+pyspellchecker>=0.8
+
+# --- Solo Windows: requerido por la integracion de voz (pythoncom) ---
+pywin32>=306; sys_platform == "win32"
+
+# --- Opcional: UI alternativa liviana basada en navegador (ver README,
+# "Alternate lightweight UI") -- no hace falta si solo usas sovnode_qt.py ---
+streamlit>=1.30
