@@ -1,0 +1,54 @@
+# Generado automaticamente por "Crear carpeta limpia para GitHub.bat"
+__pycache__/
+.git/
+.claude/
+.vscode/
+.idea/
+venv/
+.venv/
+env/
+ENV/
+build/
+dist/
+_backups/
+_to_delete/
+Claude outputs/
+sovnode_patch/
+
+# Sandbox del LLM: se versiona la carpeta pero no su contenido generado
+workspace/*
+!workspace/.gitkeep
+
+# Memoria / RAG de SovNode -- listado explicito por nombre, ademas
+# de los patrones genericos de mas abajo (*.db, *.wal, *.faiss,
+# *.meta.json, *.log). Estos son datos del USUARIO -- historial,
+# embeddings, log de auditoria -- nunca codigo del proyecto.
+sovnode_memory.db
+sovnode_memory.db-journal
+sovnode_memory.db-shm
+sovnode_memory.db-wal
+sovnode.wal
+sovnode_debug.log
+workspace_vector_index.*
+longterm_vector_index.*
+
+*.pyc
+*.pyo
+*$py.class
+*.so
+*.zip
+*.exe
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.wal
+*.faiss
+*.meta.json
+*.log
+*.tmp
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+*.bak*
