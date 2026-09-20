@@ -166,6 +166,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSystemTrayIcon,
     QTabBar,
@@ -641,12 +642,27 @@ def _fetch_rich_web_search_impl(
 
     wiki_authoritative_text = ""
     if len(results["snippets"]) < 3 or query_needs_fact:
-        _emit_log_safe(
-            log_cb,
-            "[WEB_SEARCH] Consultando Wikipedia ("
-            + ("dato puntual" if query_needs_fact else "respaldo")
-            + ")..."
-        )
+        # patch_qt65 (2026-09-18, langfix): esta linea (y las dos de
+        # reintento de Wikipedia mas abajo) se armaban siempre en
+        # espanol -- a diferencia de `search_web()`/`search_topic_images()`
+        # (import de src/tools/web_search.py) que SI reciben `lang=` y
+        # arman el log ya en el idioma correcto. `resolved_lang` ya esta
+        # en scope aca mismo (se usa 2 lineas mas abajo para elegir
+        # wiki_domain), asi que se reusa el mismo criterio.
+        if resolved_lang == "en":
+            _emit_log_safe(
+                log_cb,
+                "[WEB_SEARCH] Querying Wikipedia ("
+                + ("precise fact" if query_needs_fact else "fallback")
+                + ")..."
+            )
+        else:
+            _emit_log_safe(
+                log_cb,
+                "[WEB_SEARCH] Consultando Wikipedia ("
+                + ("dato puntual" if query_needs_fact else "respaldo")
+                + ")..."
+            )
 
         wiki_domain = "en.wikipedia.org" if resolved_lang == "en" else "es.wikipedia.org"
 
@@ -753,13 +769,25 @@ def _fetch_rich_web_search_impl(
             title_names_the_final(s.get("title", "")) for s in results["sources"]
         )
         if query_needs_fact and not already_has_final_source and (wiki_added == 0 or wants_final_source):
-            _emit_log_safe(
-                log_cb,
-                "[WEB_SEARCH] Wikipedia sin fuente específica de la final, reintentando con "
-                "consulta más específica..."
-                if wants_final_source else
-                "[WEB_SEARCH] Wikipedia sin resultado útil, reintentando con consulta más específica...",
-            )
+            # patch_qt65 (2026-09-18, langfix): mismo caso que el mensaje
+            # "Consultando Wikipedia (...)" de mas arriba -- nunca tuvo
+            # rama de idioma. Reusa `resolved_lang`, ya en scope.
+            if resolved_lang == "en":
+                _emit_log_safe(
+                    log_cb,
+                    "[WEB_SEARCH] Wikipedia has no source specific to the final, retrying with "
+                    "a more specific query..."
+                    if wants_final_source else
+                    "[WEB_SEARCH] Wikipedia had no useful result, retrying with a more specific query...",
+                )
+            else:
+                _emit_log_safe(
+                    log_cb,
+                    "[WEB_SEARCH] Wikipedia sin fuente específica de la final, reintentando con "
+                    "consulta más específica..."
+                    if wants_final_source else
+                    "[WEB_SEARCH] Wikipedia sin resultado útil, reintentando con consulta más específica...",
+                )
             _run_wikipedia_pass(f"{clean_q} final")
 
     if query_needs_fact:
@@ -925,13 +953,25 @@ def _fetch_rich_web_search_impl(
             title_names_the_final(s.get("title", "")) for s in results["sources"]
         )
         if query_needs_fact and not already_has_final_source and (wiki_added == 0 or wants_final_source):
-            _emit_log_safe(
-                log_cb,
-                "[WEB_SEARCH] Wikipedia sin fuente específica de la final, reintentando con "
-                "consulta más específica..."
-                if wants_final_source else
-                "[WEB_SEARCH] Wikipedia sin resultado útil, reintentando con consulta más específica...",
-            )
+            # patch_qt65 (2026-09-18, langfix): mismo caso que el mensaje
+            # "Consultando Wikipedia (...)" de mas arriba -- nunca tuvo
+            # rama de idioma. Reusa `resolved_lang`, ya en scope.
+            if resolved_lang == "en":
+                _emit_log_safe(
+                    log_cb,
+                    "[WEB_SEARCH] Wikipedia has no source specific to the final, retrying with "
+                    "a more specific query..."
+                    if wants_final_source else
+                    "[WEB_SEARCH] Wikipedia had no useful result, retrying with a more specific query...",
+                )
+            else:
+                _emit_log_safe(
+                    log_cb,
+                    "[WEB_SEARCH] Wikipedia sin fuente específica de la final, reintentando con "
+                    "consulta más específica..."
+                    if wants_final_source else
+                    "[WEB_SEARCH] Wikipedia sin resultado útil, reintentando con consulta más específica...",
+                )
             _run_wikipedia_pass(f"{clean_q} final")
 
     if query_needs_fact:
@@ -1286,29 +1326,74 @@ I18N = {
         "btn_download_model": "Descargar modelo",
         "engine_title": "MOTOR DE GENERACIÓN",
         "engine_local": "Local (Ollama)",
-        "engine_cloud": "Claude API (Nube)",
+        "engine_cloud": "Nube (API externa)",
+        # patch_qt66 (2026-09-19, pedido explícito del usuario: "se me
+        # acabaron los creditos, podemos usar el modelo de gemini
+        # tambien?"): antes esta sección solo sabía hablar con la API de
+        # Anthropic -- `cloud_provider_*` son las etiquetas del nuevo
+        # selector "Proveedor de Nube" (Claude/Gemini), ver
+        # `combo_cloud_provider` en _create_ui. `cloud_key_placeholder`/
+        # `cloud_key_tooltip` (Anthropic) se dejan con su texto de
+        # siempre; se agregan `_gemini` como sus equivalentes para el
+        # otro proveedor -- `_on_cloud_provider_changed` elige cuál
+        # mostrar según el proveedor activo.
+        "cloud_provider_title": "Proveedor de Nube:",
+        "cloud_provider_anthropic": "Claude (Anthropic)",
+        "cloud_provider_gemini": "Gemini (Google)",
         "cloud_key_placeholder": "sk-ant-...",
         "cloud_key_tooltip": "API key de console.anthropic.com — NO la contraseña de tu cuenta de Claude.ai. Se guarda solo en este equipo.",
+        "cloud_key_placeholder_gemini": "AIza...",
+        "cloud_key_tooltip_gemini": "API key de aistudio.google.com (Google AI Studio) — se guarda solo en este equipo, por separado de la key de Claude.",
         "btn_test_cloud_key": "Probar conexión",
+        "btn_forget_cloud_key": "Olvidar key guardada",
+        "btn_forget_cloud_key_tooltip": "Borra la API key guardada del proveedor activo en este equipo (Registro de Windows). No afecta el resto de la configuración ni la key del otro proveedor.",
+        "log_cloud_key_forgotten": "Se borró la API key guardada de este equipo para el proveedor activo.",
         "cloud_usage_idle": "Sin uso todavía en esta sesión.",
         "cloud_usage_fmt": "{0} llamadas · {1} tok in / {2} tok out · ${3:.4f} gastados",
-        "cloud_test_testing": "Probando conexión con la API de Claude...",
+        "cloud_test_testing": "Probando conexión con la API de {0}...",
         "cloud_test_ok": "✅ Conexión OK — la API key funciona (modelo: {0}).",
         "cloud_test_fail": "❌ Falló la conexión: {0}",
         "cloud_test_no_key": "Cargá una API key antes de probar la conexión.",
         "log_engine_changed": "Motor de generación: {0}.",
-        "cloud_budget_title": "Presupuesto de Sonnet por turno",
+        "log_cloud_provider_changed": "Proveedor de Nube: {0}.",
+        # patch_qt67 (2026-09-19, bug real, MEDIDO por el usuario apenas
+        # probó Gemini con patch_qt66 recién cargado: "gemini-2.5-flash"
+        # -- el default elegido en ese patch -- ya no está disponible
+        # para cuentas nuevas, la propia API de Google devolvió el error
+        # sugiriendo "gemini-3.6-flash" como reemplazo). El catálogo de
+        # Gemini cambia mucho más rápido que el de Anthropic, así que en
+        # vez de perseguir cada baja de modelo con un patch de código se
+        # agrega este campo editable: el usuario pega el ID que la API
+        # le sugiera y sigue andando sin esperar a nadie.
+        "cloud_model_title": "Modelo:",
+        "cloud_model_placeholder": "ej: gemini-3.6-flash",
+        "cloud_model_tooltip": (
+            "ID exacto del modelo a usar con el proveedor activo. Google "
+            "(y, con menos frecuencia, Anthropic) cambian o dan de baja "
+            "modelos seguido -- si \"Probar conexión\" falla con un error "
+            "de \"modelo ya no disponible\", pegá acá el ID nuevo que "
+            "sugiera el mensaje de error y probá de nuevo."
+        ),
+        "log_cloud_model_changed": "Modelo de Nube: {0}.",
+        # patch_qt66 (2026-09-19): "Presupuesto de Sonnet" -> "Presupuesto
+        # de Nube" -- este selector gobierna el techo de tokens de
+        # CUALQUIER proveedor de Nube activo (antes solo existía Claude/
+        # Sonnet, ver `_cloud_output_ceiling_tokens_for_cents`), así que
+        # nombrarlo por el modelo de un solo proveedor quedaba
+        # confuso/incorrecto apenas Gemini está seleccionado.
+        "cloud_budget_title": "Presupuesto de Nube por turno",
         "cloud_budget_option_1c": "Bajo — respuestas cortas",
         "cloud_budget_option_2c": "Medio — funciones completas",
         "cloud_budget_option_4c": "Alto — módulos medianos",
         "cloud_budget_option_8c": "Extra — archivos grandes",
-        "log_cloud_budget_changed": "Presupuesto de Sonnet: {0} por turno.",
+        "log_cloud_budget_changed": "Presupuesto de Nube: {0} por turno.",
         "header_cost_badge_idle": "$0.00/turno · ${0:.2f} sesión",
         "header_cost_badge_fmt": "${0:.2f}/turno · ${1:.2f} sesión",
         "header_cost_badge_tooltip": (
-            "Costo estimado de la API de Claude (Nube) -- el motor Local "
-            "no tiene costo. El color indica qué tan cerca estuvo el "
-            "último turno del presupuesto de Sonnet elegido."
+            "Costo estimado de la API de Nube activa (Claude o Gemini, "
+            "según el proveedor elegido) -- el motor Local no tiene "
+            "costo. El color indica qué tan cerca estuvo el último turno "
+            "del presupuesto de Nube elegido."
         ),
         "sidebar_section_appearance": "Apariencia",
         "sidebar_section_engine": "Motor",
@@ -1357,6 +1442,8 @@ I18N = {
         # log_message por turno, coloreando en rojo cualquier red de
         # seguridad que haya disparado (circuit-breaker, blindaje de
         # archivos, etc.) en vez de mostrar todo en un único color plano.
+        "terminal_console_title": "🖥️ CONSOLA DE SISTEMA / LOGS",
+        "btn_clear_terminal": "Limpiar",
         "advanced_terminal_toggle": "Terminal avanzada",
         "advanced_terminal_toggle_tooltip": (
             "Apagado (por defecto): la consola muestra cada línea tal "
@@ -1589,29 +1676,59 @@ I18N = {
         "btn_download_model": "Download model",
         "engine_title": "GENERATION ENGINE",
         "engine_local": "Local (Ollama)",
-        "engine_cloud": "Claude API (Cloud)",
+        "engine_cloud": "Cloud (external API)",
+        # patch_qt66 (2026-09-19) -- see the Spanish block for the full
+        # rationale (user request: ran out of Claude credits, asked to
+        # add Gemini as an alternative provider).
+        "cloud_provider_title": "Cloud provider:",
+        "cloud_provider_anthropic": "Claude (Anthropic)",
+        "cloud_provider_gemini": "Gemini (Google)",
         "cloud_key_placeholder": "sk-ant-...",
         "cloud_key_tooltip": "API key from console.anthropic.com — NOT your Claude.ai account password. Stored only on this machine.",
+        "cloud_key_placeholder_gemini": "AIza...",
+        "cloud_key_tooltip_gemini": "API key from aistudio.google.com (Google AI Studio) — stored only on this machine, separately from your Claude key.",
         "btn_test_cloud_key": "Test connection",
+        "btn_forget_cloud_key": "Forget saved key",
+        "btn_forget_cloud_key_tooltip": "Erases the active provider's saved API key on this machine (Windows Registry). Doesn't affect the rest of your settings or the other provider's key.",
+        "log_cloud_key_forgotten": "Saved API key erased from this device for the active provider.",
         "cloud_usage_idle": "No usage yet this session.",
         "cloud_usage_fmt": "{0} calls · {1} tok in / {2} tok out · ${3:.4f} spent",
-        "cloud_test_testing": "Testing connection to the Claude API...",
+        "cloud_test_testing": "Testing connection to the {0} API...",
         "cloud_test_ok": "✅ Connection OK — the API key works (model: {0}).",
         "cloud_test_fail": "❌ Connection failed: {0}",
         "cloud_test_no_key": "Load an API key before testing the connection.",
         "log_engine_changed": "Generation engine: {0}.",
-        "cloud_budget_title": "Sonnet budget per turn",
+        "log_cloud_provider_changed": "Cloud provider: {0}.",
+        # patch_qt67 (2026-09-19) -- see the Spanish block: the user hit
+        # a real "model no longer available" error from Gemini within
+        # minutes of patch_qt66 shipping, so this field lets them paste
+        # a replacement model ID without waiting on a code patch.
+        "cloud_model_title": "Model:",
+        "cloud_model_placeholder": "e.g. gemini-3.6-flash",
+        "cloud_model_tooltip": (
+            "Exact model ID to use with the active provider. Google "
+            "(and, less often, Anthropic) retire or rename models "
+            "fairly often -- if \"Test connection\" fails with a \"model "
+            "no longer available\" error, paste the new ID it suggests "
+            "here and try again."
+        ),
+        "log_cloud_model_changed": "Cloud model: {0}.",
+        # patch_qt66 (2026-09-19): see the Spanish block for why this
+        # dropped the "Sonnet" name (now governs any active Cloud
+        # provider, not just Claude).
+        "cloud_budget_title": "Cloud budget per turn",
         "cloud_budget_option_1c": "Low — short answers",
         "cloud_budget_option_2c": "Medium — full functions",
         "cloud_budget_option_4c": "High — medium modules",
         "cloud_budget_option_8c": "Extra — large files",
-        "log_cloud_budget_changed": "Sonnet budget: {0} per turn.",
+        "log_cloud_budget_changed": "Cloud budget: {0} per turn.",
         "header_cost_badge_idle": "$0.00/turn · ${0:.2f} session",
         "header_cost_badge_fmt": "${0:.2f}/turn · ${1:.2f} session",
         "header_cost_badge_tooltip": (
-            "Estimated Claude API (Cloud) cost -- the Local engine is "
+            "Estimated cost of the active Cloud API (Claude or Gemini, "
+            "depending on the chosen provider) -- the Local engine is "
             "free. Color shows how close the last turn got to your "
-            "chosen Sonnet budget."
+            "chosen Cloud budget."
         ),
         "sidebar_section_appearance": "Appearance",
         "sidebar_section_engine": "Engine",
@@ -1648,6 +1765,8 @@ I18N = {
             "Command execution DISABLED: SovNode can suggest commands in "
             "chat, but won't run them."
         ),
+        "terminal_console_title": "🖥️ SYSTEM CONSOLE / LOGS",
+        "btn_clear_terminal": "Clear",
         "advanced_terminal_toggle": "Advanced terminal",
         "advanced_terminal_toggle_tooltip": (
             "Off (default): the console shows every line as it arrives, "
@@ -1931,7 +2050,25 @@ def build_style(theme: dict[str, str], font_family: str = "Inter") -> str:
 
         QFrame#sidebar {{
             background-color: {theme["sidebar"]};
+        }}
+
+        /* patch_qt72: QScrollArea#sidebarScroll es el contenedor nuevo
+           que envuelve a QFrame#sidebar (ver _create_ui) -- sin esta
+           regla, el QScrollArea y su viewport toman el fondo blanco
+           por defecto de Qt, que se asomaria como un borde/flash
+           blanco alrededor del sidebar (mismo tipo de problema que ya
+           tenia QListWidget#workspacesList sin su propia regla, mas
+           arriba). El borde derecho de 1px se movio del QFrame de
+           adentro al QScrollArea de afuera para que siga
+           dibujandose en el mismo lugar visual de siempre. */
+        QScrollArea#sidebarScroll {{
+            background-color: {theme["sidebar"]};
+            border: none;
             border-right: 1px solid {theme["border"]};
+        }}
+
+        QScrollArea#sidebarScroll > QWidget > QWidget {{
+            background-color: {theme["sidebar"]};
         }}
 
         QFrame#sidebar QLabel, QFrame#sidebarCard QLabel {{
@@ -2145,9 +2282,59 @@ def build_style(theme: dict[str, str], font_family: str = "Inter") -> str:
             color: {theme["secondary"]};
         }}
 
+        /* patch_qt70 (2026-09-19, bug real, MEDIDO -- screenshot del
+           usuario del panel "Motor de Generacion" con "Probar conexion"/
+           "Olvidar key guardada" viendose como cajas VACIAS): el color
+           de texto por defecto de secondaryButton era theme["secondary"]
+           -- el mismo gris apagado que usan las etiquetas de seccion
+           (sectionTitle), pensado para texto secundario/de apoyo, NO
+           para el label principal de un boton interactivo -- sobre el
+           fondo theme["card"] el contraste era bajo, y a un tamano de
+           fuente chico en una pantalla de alta densidad el texto del
+           boton quedaba practicamente invisible hasta pasar el mouse
+           por encima (:hover si lo subia a theme["text"], pero el
+           estado POR DEFECTO -- el que se ve todo el tiempo sin
+           interactuar -- es el que importa para poder distinguir que
+           dice cada boton). Afecta a TODOS los secondaryButton de la
+           app (Probar conexion, Olvidar key guardada, Descargar
+           modelo, Anadir/Quitar carpeta, Exportar chat, Exportar
+           dataset, engranaje de Ajustes, adjuntar, microfono, TTS), no
+           solo a los nuevos de Gemini. Fix: color de texto por defecto
+           sube a theme["text"] (el mismo que ya usaba :hover) -- el
+           hover sigue aportando el resaltado del borde en
+           theme["accent"], pero ya no es la unica forma de leer el
+           boton.
+
+           BLINDAJE (2026-09-19, patch_qt71 -- bug real, MEDIDO por
+           screenshot del usuario tras patch_qt70: "arregla la interfaz
+           ahora, a el estilo que tenia antes" -- toda la UI habia
+           quedado con el estilo NATIVO de Windows -- combos, botones y
+           la lista de Workspaces en gris plano sin nada del tema
+           oscuro/Cyberpunk). Causa raiz: el comentario de arriba se
+           escribio originalmente con simbolo numeral al principio de
+           cada linea (sintaxis de comentario de PYTHON), pero ese
+           bloque entero vive DENTRO del f-string grande que arma todo
+           el QSS (ver el return de build_style, cerca de la linea
+           2040) -- CSS no reconoce ese simbolo como marcador de
+           comentario (eso es Python/shell), asi que esas lineas se
+           insertaban como texto LITERAL en medio de la hoja de estilos
+           real que se le manda a Qt. Eso rompia el parseo de QSS justo
+           ahi, y todo lo que Qt no pudo seguir interpretando despues de
+           ese punto (QComboBox, QListWidget#workspacesList, y hasta
+           esta misma regla de secondaryButton que se queria arreglar)
+           se quedaba sin ningun estilo aplicado, cayendo al render
+           nativo del SO -- exactamente lo que se ve en el segundo
+           screenshot del usuario. Cambiado a comentario de bloque CSS
+           real (slash-asterisco ... asterisco-slash) -- unico formato
+           de comentario valido dentro de un QSS de Qt. Leccion para
+           futuros patches: cualquier BLINDAJE que se agregue dentro de
+           ese f-string grande de build_style tiene que usar ese
+           formato de comentario CSS, nunca el simbolo numeral -- fuera
+           de ese f-string, el simbolo numeral vuelve a ser un
+           comentario de Python normal. */
         QPushButton#secondaryButton {{
             background-color: {theme["card"]};
-            color: {theme["secondary"]};
+            color: {theme["text"]};
             border: 1px solid {theme["border"]};
             border-radius: 6px;
             padding: 9px;
@@ -2268,8 +2455,8 @@ def build_style(theme: dict[str, str], font_family: str = "Inter") -> str:
             color: {theme["text"]};
             border: 1px solid {theme["border"]};
             border-radius: 6px;
-            padding: 6px;
-            font-size: 11px;
+            padding: 7px;
+            font-size: 12px;
         }}
 
         QComboBox::drop-down {{
@@ -3613,14 +3800,15 @@ class _ThoughtStreamFilter:
 # atascado para siempre.
 _WEB_SEARCH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="StreamWebSearch")
 
-class _CancelToken:
-    def __init__(self, check_fn):
-        self._check_fn = check_fn
-
-
-    def is_set(self) -> bool:
-        return self._check_fn()
-
+# BLINDAJE (2026-09-20, patch_qt74 -- limpieza encontrada en la auditoría
+# previa a subir el proyecto a GitHub): había DOS definiciones seguidas
+# de `_CancelToken`, una pegada arriba de la otra -- la segunda (con
+# docstring y `bool(...)` explícito en `is_set`) pisaba en silencio a la
+# primera (sin docstring, sin el `bool()`), así que la primera nunca se
+# usaba de verdad (pyflakes: "redefinition of unused '_CancelToken'").
+# Comportamiento idéntico en la práctica (`check_fn()` en este código ya
+# siempre devuelve un bool real), pero es código muerto duplicado sin
+# ninguna razón para existir -- se deja solo la versión con docstring.
 class _CancelToken:
     """Adaptador simple: expone `.is_set()` sobre una función de chequeo arbitraria."""
 
@@ -3810,37 +3998,61 @@ class HealthCheckWorker(QThread):
 
 class CloudKeyCheckWorker(QThread):
     """
-    Prueba la API key de Claude en segundo plano (mismo patrón que
-    HealthCheckWorker de arriba, para no congelar la UI) — un pedido de
-    1 max_tokens es la forma más barata de confirmar que la key es
-    válida sin gastar crédito de verdad generando algo largo.
+    Prueba la API key de Claude (o, desde patch_qt66, de Gemini) en
+    segundo plano (mismo patrón que HealthCheckWorker de arriba, para
+    no congelar la UI) — un pedido de 1 token de salida es la forma más
+    barata de confirmar que la key es válida sin gastar crédito de
+    verdad generando algo largo.
+
+    `provider` (2026-09-19, patch_qt66 -- pedido explícito del usuario:
+    "se me acabaron los creditos, podemos usar el modelo de gemini
+    tambien?"): "anthropic" (default, comportamiento de siempre) o
+    "gemini" -- cada uno habla con su propia API con su propio formato
+    de request/response, ver `Orchestrator._call_gemini_api_raw` para
+    el mismo detalle del lado del motor de generación real.
     """
 
     completed = pyqtSignal(bool, str)
 
-    def __init__(self, api_key: str, model_id: str) -> None:
+    def __init__(self, api_key: str, model_id: str, provider: str = "anthropic") -> None:
         super().__init__()
         self._api_key = api_key
         self._model_id = model_id
+        self._provider = provider
 
     def run(self) -> None:
         try:
             import requests
 
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self._api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": self._model_id,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "hi"}],
-                },
-                timeout=15,
-            )
+            if self._provider == "gemini":
+                resp = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{self._model_id}:generateContent",
+                    headers={
+                        "x-goog-api-key": self._api_key,
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                        "generationConfig": {"maxOutputTokens": 1},
+                    },
+                    timeout=15,
+                )
+            else:
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": self._api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": self._model_id,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                    timeout=15,
+                )
             if resp.status_code == 200:
                 self.completed.emit(True, "")
             else:
@@ -5227,7 +5439,29 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self._theme_name = "Cyberpunk Dark"
-        self._current_lang = "Español"
+        # BLINDAJE (2026-09-19, patch_qt73 -- pedido explícito del
+        # usuario: "añade que el lenguaje se guarde el ultimo que
+        # elegiste, es engorroso ser ingles y cambiar a cada rato de
+        # idioma"). Antes, `self._current_lang` arrancaba SIEMPRE en
+        # "Español" hardcodeado, sin importar qué hubiera elegido el
+        # usuario la sesión anterior con `self.combo_lang` -- mismo
+        # mecanismo de persistencia que ya usan `_on_workspace_tools_
+        # toggled`/`_on_run_cmd_toggled`/`_on_advanced_terminal_toggled`
+        # (QSettings, clave propia), aplicado acá. `type=str` con
+        # default "Español" cubre tanto la primera corrida (sin valor
+        # guardado todavía) como un valor corrupto/de otra versión; el
+        # chequeo de membresía evita que un valor inesperado en el
+        # Registro (ej. de una versión vieja) deje `combo_lang` o
+        # `I18N[self._current_lang]` en un estado no reconocido más
+        # abajo en `__init__` -- ambos ya consumen `self._current_lang`
+        # tal cual, así que no hace falta tocar nada más para que la
+        # restauración se propague (selector de idioma, prompt del
+        # propio Orchestrator vía `set_language`, todos los textos de
+        # la UI).
+        _saved_lang = QSettings("SovNode", "SovNode").value(
+            "ui/language", "Español", type=str
+        )
+        self._current_lang = _saved_lang if _saved_lang in ("Español", "English") else "Español"
         self._turn_count = 0
         self._is_online = False
         self._last_ollama_status: Optional[bool] = None
@@ -5840,8 +6074,17 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(280)
-        self.config_panel = sidebar
+        # patch_qt70 (2026-09-19, pedido explícito del usuario: "mejora
+        # esta parte de la interfaz para que todo sea distinguible" --
+        # sobre un screenshot real donde el panel "Motor de Generación"
+        # se veía como un bloque de cajas vacías/ilegibles). 280px ya
+        # quedaba justo antes de Gemini; con el selector de proveedor +
+        # el campo de modelo nuevos (textos más largos: "Gemini
+        # (Google)", "gemini-3.6-flash", "Probar conexión") necesitaba
+        # más aire. El ancho fijo de 300px, que antes vivía en este
+        # `sidebar` (QFrame), ahora vive en `sidebar_scroll` (ver más
+        # abajo, patch_qt72) -- mismo ancho final, un contenedor
+        # distinto lo aplica.
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(16, 20, 16, 20)
         sidebar_layout.setSpacing(14)
@@ -5921,8 +6164,21 @@ class MainWindow(QMainWindow):
         engine_card = QFrame()
         engine_card.setObjectName("sidebarCard")
         ec_layout = QVBoxLayout(engine_card)
-        ec_layout.setContentsMargins(10, 10, 10, 10)
-        ec_layout.setSpacing(6)
+        ec_layout.setContentsMargins(10, 12, 10, 12)
+        # patch_qt69 (2026-09-19, pedido explícito del usuario: "mejora
+        # las dimensiones de los cuadros en la interfaz para que no se
+        # aplasten entre si"): esta tarjeta pasó de 6 widgets (antes de
+        # patch_qt66/67) a 13 -- el selector de proveedor y el campo de
+        # modelo nuevos se sumaron con el mismo espaciado uniforme de
+        # siempre, sin ningún respiro extra entre subgrupos lógicos
+        # (motor / proveedor+modelo / credenciales / presupuesto), así
+        # que a simple vista todo el panel se veía como un solo bloque
+        # apretado. Espaciado base subido de 6 a 9px, más un
+        # `addSpacing(8)` extra (ver más abajo) antes de cada widget que
+        # arranca un subgrupo nuevo -- separa visualmente sin tocar el
+        # tamaño de cada control individual (ya definido en el QSS de
+        # QComboBox/QLineEdit).
+        ec_layout.setSpacing(9)
 
         self.engine_title_label = QLabel(tr["engine_title"])
         self.engine_title_label.setObjectName("sectionTitle")
@@ -5934,6 +6190,47 @@ class MainWindow(QMainWindow):
         self.combo_engine.currentIndexChanged.connect(self._on_engine_changed)
         ec_layout.addWidget(self.combo_engine)
 
+        # patch_qt66 (2026-09-19, pedido explícito del usuario: "se me
+        # acabaron los creditos, podemos usar el modelo de gemini
+        # tambien?"): selector de PROVEEDOR de Nube, independiente del
+        # combo Local/Nube de arriba -- ese elige el MOTOR (local vs.
+        # API externa), este elige CUÁL API externa una vez que "Nube"
+        # ya está seleccionado. Ver `_on_cloud_provider_changed` y
+        # `Orchestrator.set_cloud_backend(..., provider=...)`.
+        ec_layout.addSpacing(8)  # patch_qt69: respiro antes del subgrupo "proveedor+modelo"
+        self.cloud_provider_label = QLabel(tr["cloud_provider_title"])
+        self.cloud_provider_label.setObjectName("sectionTitle")
+        ec_layout.addWidget(self.cloud_provider_label)
+
+        self.combo_cloud_provider = QComboBox()
+        self.combo_cloud_provider.addItem(
+            tr["cloud_provider_anthropic"], self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        )
+        self.combo_cloud_provider.addItem(
+            tr["cloud_provider_gemini"], self.orchestrator.CLOUD_PROVIDER_GEMINI
+        )
+        self.combo_cloud_provider.currentIndexChanged.connect(
+            self._on_cloud_provider_changed
+        )
+        ec_layout.addWidget(self.combo_cloud_provider)
+
+        # patch_qt67 (2026-09-19, bug real, MEDIDO -- ver el BLINDAJE
+        # junto a "cloud_model_title" en I18N): campo de MODELO editable
+        # a mano, sin esto el `model_id` de cada proveedor solo se podía
+        # cambiar con un patch de código. Se guarda por proveedor igual
+        # que la API key (`cloud/model_id_anthropic`/`cloud/model_id_
+        # gemini`, ver `_on_cloud_model_edited`/`_load_cloud_settings`).
+        self.cloud_model_label = QLabel(tr["cloud_model_title"])
+        self.cloud_model_label.setObjectName("sectionTitle")
+        ec_layout.addWidget(self.cloud_model_label)
+
+        self.cloud_model_input = QLineEdit()
+        self.cloud_model_input.setPlaceholderText(tr["cloud_model_placeholder"])
+        self.cloud_model_input.setToolTip(tr["cloud_model_tooltip"])
+        self.cloud_model_input.editingFinished.connect(self._on_cloud_model_edited)
+        ec_layout.addWidget(self.cloud_model_input)
+
+        ec_layout.addSpacing(8)  # patch_qt69: respiro antes del subgrupo "credenciales"
         self.cloud_key_input = QLineEdit()
         self.cloud_key_input.setPlaceholderText(tr["cloud_key_placeholder"])
         self.cloud_key_input.setToolTip(tr["cloud_key_tooltip"])
@@ -5947,6 +6244,22 @@ class MainWindow(QMainWindow):
         self.btn_test_cloud_key.clicked.connect(self._on_test_cloud_key_clicked)
         ec_layout.addWidget(self.btn_test_cloud_key)
 
+        # patch_qt65 (2026-09-18, pedido explícito del usuario tras ver
+        # que abrir OTRA copia de la app -- el build en dist/ -- ya
+        # traía su key cargada: `cloud_key_input` la guarda en
+        # `QSettings("SovNode","SovNode")` -- el Registro de Windows --
+        # apenas termina de editarla, sin pedir confirmación. Se
+        # mantiene ese guardado automático (más cómodo si sos el único
+        # que usa este equipo), pero ahora hay un botón explícito para
+        # borrar esa key persistida sin tener que ir al Registro a mano.
+        self.btn_forget_cloud_key = QPushButton(tr["btn_forget_cloud_key"])
+        self.btn_forget_cloud_key.setObjectName("secondaryButton")
+        self.btn_forget_cloud_key.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_forget_cloud_key.setToolTip(tr["btn_forget_cloud_key_tooltip"])
+        self.btn_forget_cloud_key.clicked.connect(self._on_forget_cloud_key_clicked)
+        ec_layout.addWidget(self.btn_forget_cloud_key)
+
+        ec_layout.addSpacing(8)  # patch_qt69: respiro antes del subgrupo "presupuesto"
         self.cloud_budget_label = QLabel(tr["cloud_budget_title"])
         self.cloud_budget_label.setObjectName("sectionTitle")
         ec_layout.addWidget(self.cloud_budget_label)
@@ -6038,8 +6351,51 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.btn_export)
         sidebar_layout.addWidget(self.btn_export_training)
 
-        sidebar.setVisible(False)
-        main_layout.addWidget(sidebar)
+        # patch_qt72 (2026-09-19, bug real, MEDIDO por screenshot del
+        # usuario: el panel "Motor de Generación" mostraba texto de
+        # filas distintas (etiqueta "Modelo:", el campo de key
+        # enmascarado, "Presupuesto de nube por turno") amontonado /
+        # pisándose entre sí -- pedido explícito: "que tengan una
+        # escala mínima donde se pueda ver... sin tocar el diseño").
+        # Causa raíz: `sidebar` (el QFrame con las 3 secciones
+        # plegables: Apariencia, Motor, Workspace) se agregaba
+        # DIRECTO a `main_layout` sin ningún `QScrollArea` de por
+        # medio. La cantidad de controles del sidebar creció mucho
+        # esta sesión (selector de proveedor + campo de modelo +
+        # botones nuevos de Gemini, patch_qt66/67) y la ventana
+        # respeta una geometría MÍNIMA/PERSISTIDA (`self.setMinimumSize
+        # (1024, 700)`, más lo que haya quedado guardado en
+        # `QSettings("SovNode","SovNode").value("window/geometry")` de
+        # una sesión anterior, de antes de que existieran estos
+        # campos) -- si esa altura no alcanza para el contenido
+        # natural del sidebar, no hay forma de avisarle al usuario
+        # salvo comprimir/recortar filas. No lo cambiamos: le damos al
+        # sidebar una salida decente, envolviéndolo en un
+        # `QScrollArea` con `setWidgetResizable(True)` (el sidebar
+        # mantiene su ancho fijo vía el scroll area, no vía sí mismo)
+        # y sin scroll horizontal -- así cada control SIEMPRE se
+        # dibuja a su tamaño natural (el QSS no se tocó, cero cambios
+        # de color/fuente/padding, solo el contenedor que lo aloja) y
+        # si no entra todo en alto, aparece una barra de scroll
+        # vertical en vez de amontonar texto. `self.config_panel`
+        # (el botón de engranaje lo muestra/oculta) pasa a apuntar al
+        # scroll area en vez de al QFrame de adentro, para que
+        # mostrar/ocultar siga funcionando igual que antes.
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setObjectName("sidebarScroll")
+        sidebar_scroll.setWidget(sidebar)
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        sidebar_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        sidebar_scroll.setFixedWidth(300)
+        self.config_panel = sidebar_scroll
+        sidebar_scroll.setVisible(False)
+        main_layout.addWidget(sidebar_scroll)
 
         content_container = QWidget()
         content_layout = QVBoxLayout(content_container)
@@ -6288,8 +6644,15 @@ class MainWindow(QMainWindow):
         term_layout.setContentsMargins(12, 10, 12, 10)
 
         term_header = QHBoxLayout()
-        term_title = QLabel("🖥️ CONSOLA DE SISTEMA / LOGS")
-        term_title.setObjectName("terminalTitle")
+        # patch_qt65 (2026-09-18, langfix): guardados como self.* (antes
+        # eran variables locales) para poder re-traducirlos en
+        # `_on_lang_changed` -- quedaban fijos en español aunque el resto
+        # de la UI ya estuviera en inglés (mismo patrón "BLINDAJE" que
+        # workspaces_list/btn_add_workspace/chk_workspace_tools ahí
+        # mismo, solo que a estos dos nunca los agregaron a esa función).
+        self.term_title = QLabel(tr["terminal_console_title"])
+        self.term_title.setObjectName("terminalTitle")
+        term_title = self.term_title
 
         self.metrics_label = QLabel("")
         self.metrics_label.setObjectName("metricsLabel")
@@ -6298,9 +6661,10 @@ class MainWindow(QMainWindow):
         self.stage_metrics_label.setObjectName("stageMetricsLabel")
         self.stage_metrics_label.setWordWrap(True)
 
-        btn_clear_term = QPushButton("Limpiar")
-        btn_clear_term.setObjectName("terminalClearButton")
-        btn_clear_term.clicked.connect(self._clear_terminal)
+        self.btn_clear_term = QPushButton(tr["btn_clear_terminal"])
+        self.btn_clear_term.setObjectName("terminalClearButton")
+        self.btn_clear_term.clicked.connect(self._clear_terminal)
+        btn_clear_term = self.btn_clear_term
 
         # patch_qt64 (2026-09-18, pedido explícito del usuario -- "un
         # botón en la terminal... 'terminal más avanzada'"): interruptor
@@ -6336,10 +6700,49 @@ class MainWindow(QMainWindow):
         con QSettings -- mismo mecanismo que el resto de settings
         restaurados en `_load_cloud_settings` -- para que sobreviva a un
         reinicio de la app en vez de volver siempre al default (False).
+
+        patch_qt68 (2026-09-19, pedido explícito del usuario: "mejora el
+        sistema de workspace si esta desactivado no deberia encenderse
+        en ningun momento"): hasta este patch, el toggle solo controlaba
+        si el modelo podía usar las herramientas read_file/write_file/
+        edit_file/list_dir -- el `WorkspaceWatcherWorker` (escaneo de
+        disco en segundo plano para indexar RAG/búsqueda semántica, ver
+        `_load_persisted_workspaces`/`_on_add_workspace_clicked` y el
+        BLINDAJE de 2026-09-02 sobre los "DOS conceptos de workspace
+        totalmente desconectados") seguía corriendo SIN IMPORTAR este
+        interruptor -- en contradicción directa con el propio tooltip de
+        este control ("Apagado (por defecto): SovNode nunca... sin tocar
+        el disco"). Bug real, MEDIDO por el usuario en vivo (log): con
+        las herramientas ya desactivadas ("Herramientas de workspace
+        DESACTIVADAS" en consola), un turno posterior igual mostró
+        "📚 [Workspace] 'minesweeper.py' reindexado: 4 fragmento(s)" --
+        el watcher seguía leyendo el archivo del disco de fondo.
+
+        Ahora el toggle también arranca/para el hilo del watcher: apagar
+        "Habilitar herramientas de archivo" detiene CUALQUIER lectura de
+        disco del lado de Workspaces (no solo la escritura vía
+        tool-calling), y volver a prenderlo retoma el escaneo de las
+        carpetas que el usuario ya tenía agregadas -- sin que haga falta
+        quitarlas y volver a agregarlas. `stop()` es cooperativo (revisa
+        un flag entre archivos, nunca mata el hilo a mitad de una
+        llamada a FAISS -- ver el docstring de `WorkspaceWatcherWorker`)
+        y `wait(1500)` espera a que termine antes de dejar
+        `_workspace_watcher_started` en `False`, para que un toggle
+        ON/OFF/ON rápido no intente arrancar un hilo que todavía no
+        terminó de pararse.
         """
         self.orchestrator.workspace_tools_enabled = bool(checked)
         settings = QSettings("SovNode", "SovNode")
         settings.setValue("workspace/tools_enabled", bool(checked))
+        if checked:
+            if not self._workspace_watcher_started:
+                self._workspace_watcher.start()
+                self._workspace_watcher_started = True
+        else:
+            if self._workspace_watcher_started:
+                self._workspace_watcher.stop()
+                self._workspace_watcher.wait(1500)
+                self._workspace_watcher_started = False
         tr = I18N[self._current_lang]
         self._terminal_log(
             tr["log_workspace_tools_enabled"] if checked
@@ -6393,26 +6796,83 @@ class MainWindow(QMainWindow):
             I18N[self._current_lang]["log_theme_changed"].format(theme_name), "info"
         )
 
+    def _apply_cloud_key_field_for_provider(self, provider: str) -> None:
+        """
+        patch_qt66 (2026-09-19): placeholder/tooltip de `cloud_key_input`
+        según el proveedor de Nube activo -- llamado al cargar
+        configuración, al cambiar de proveedor y al cambiar de idioma
+        (ver `_on_lang_changed`), para que los tres caminos muestren
+        siempre el texto correcto en vez de quedarse con el de
+        Anthropic a secas como pasaba antes de este patch.
+        """
+        tr = I18N[self._current_lang]
+        if provider == self.orchestrator.CLOUD_PROVIDER_GEMINI:
+            self.cloud_key_input.setPlaceholderText(tr["cloud_key_placeholder_gemini"])
+            self.cloud_key_input.setToolTip(tr["cloud_key_tooltip_gemini"])
+        else:
+            self.cloud_key_input.setPlaceholderText(tr["cloud_key_placeholder"])
+            self.cloud_key_input.setToolTip(tr["cloud_key_tooltip"])
+
     def _load_cloud_settings(self) -> None:
         """
-        Restaura el motor de generación + API key persistidos entre
-        reinicios (ver la nota junto a `engine_card` en _create_ui).
-        Aplica el estado tanto a la UI como al orquestador real
-        (`Orchestrator.set_cloud_backend`) para que un turno arrancado
-        apenas se abre la app ya respete lo que el usuario dejó
-        configurado la última vez.
+        Restaura el motor de generación + proveedor + API key
+        persistidos entre reinicios (ver la nota junto a `engine_card`
+        en _create_ui). Aplica el estado tanto a la UI como al
+        orquestador real (`Orchestrator.set_cloud_backend`) para que un
+        turno arrancado apenas se abre la app ya respete lo que el
+        usuario dejó configurado la última vez.
+
+        patch_qt66 (2026-09-19, pedido explícito del usuario: "se me
+        acabaron los creditos, podemos usar el modelo de gemini
+        tambien?"): la API key y el modelo ahora se guardan POR
+        PROVEEDOR (`cloud/api_key_<provider>`/`cloud/model_id_<provider>`)
+        en vez de una sola key compartida -- migra de forma NO
+        DESTRUCTIVA desde las claves viejas `cloud/api_key`/
+        `cloud/model_id` (se interpretan como las de Anthropic, el único
+        proveedor que existía antes de este patch) si las nuevas
+        todavía no existen, sin borrar las viejas -- así una instalación
+        con la key de Claude ya guardada no la pierde al actualizar.
         """
         settings = QSettings("SovNode", "SovNode")
         enabled = settings.value("cloud/enabled", False, type=bool)
-        api_key = settings.value("cloud/api_key", "", type=str) or ""
-        model_id = settings.value(
-            "cloud/model_id", self.orchestrator.CLOUD_DEFAULT_MODEL, type=str
+        provider = settings.value(
+            "cloud/provider", self.orchestrator.CLOUD_PROVIDER_ANTHROPIC, type=str
         )
+        if provider not in (
+            self.orchestrator.CLOUD_PROVIDER_ANTHROPIC,
+            self.orchestrator.CLOUD_PROVIDER_GEMINI,
+        ):
+            provider = self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+
+        _legacy_api_key = settings.value("cloud/api_key", "", type=str) or ""
+        _legacy_model_id = settings.value("cloud/model_id", "", type=str) or ""
+        api_key_anthropic = settings.value(
+            "cloud/api_key_anthropic", _legacy_api_key, type=str
+        ) or ""
+        model_id_anthropic = settings.value(
+            "cloud/model_id_anthropic",
+            _legacy_model_id or self.orchestrator.CLOUD_DEFAULT_MODEL,
+            type=str,
+        )
+        api_key_gemini = settings.value("cloud/api_key_gemini", "", type=str) or ""
+        model_id_gemini = settings.value(
+            "cloud/model_id_gemini", self.orchestrator.GEMINI_DEFAULT_MODEL, type=str
+        )
+        if provider == self.orchestrator.CLOUD_PROVIDER_GEMINI:
+            api_key, model_id = api_key_gemini, model_id_gemini
+        else:
+            api_key, model_id = api_key_anthropic, model_id_anthropic
         budget_cents = settings.value("cloud/output_budget_cents", 1, type=int)
         if budget_cents not in (1, 2, 4, 8):
             budget_cents = 1
 
+        self.combo_cloud_provider.blockSignals(True)
+        _prov_idx = self.combo_cloud_provider.findData(provider)
+        self.combo_cloud_provider.setCurrentIndex(_prov_idx if _prov_idx >= 0 else 0)
+        self.combo_cloud_provider.blockSignals(False)
+        self._apply_cloud_key_field_for_provider(provider)
         self.cloud_key_input.setText(api_key)
+        self.cloud_model_input.setText(model_id)
         self.combo_engine.blockSignals(True)
         self.combo_engine.setCurrentIndex(1 if enabled else 0)
         self.combo_engine.blockSignals(False)
@@ -6423,7 +6883,10 @@ class MainWindow(QMainWindow):
         self._update_cloud_key_visibility()
 
         self.orchestrator.set_cloud_backend(
-            bool(enabled), api_key=(api_key or None), model_id=model_id
+            bool(enabled),
+            api_key=(api_key or None),
+            model_id=model_id,
+            provider=provider,
         )
         self.orchestrator.set_cloud_output_budget(int(budget_cents))
         self._refresh_cloud_usage_label()
@@ -6460,8 +6923,16 @@ class MainWindow(QMainWindow):
 
     def _update_cloud_key_visibility(self) -> None:
         is_cloud = self.combo_engine.currentData() == "cloud"
+        # patch_qt66 (2026-09-19): el selector de proveedor solo tiene
+        # sentido cuando el motor "Nube" está activo, mismo criterio que
+        # el resto de los widgets de esta sección.
+        self.cloud_provider_label.setVisible(is_cloud)
+        self.combo_cloud_provider.setVisible(is_cloud)
+        self.cloud_model_label.setVisible(is_cloud)
+        self.cloud_model_input.setVisible(is_cloud)
         self.cloud_key_input.setVisible(is_cloud)
         self.btn_test_cloud_key.setVisible(is_cloud)
+        self.btn_forget_cloud_key.setVisible(is_cloud)
         self.cloud_budget_label.setVisible(is_cloud)
         self.combo_cloud_budget.setVisible(is_cloud)
         if hasattr(self, "header_cost_badge"):
@@ -6477,6 +6948,52 @@ class MainWindow(QMainWindow):
         tr = I18N[self._current_lang]
         engine_name = tr["engine_cloud"] if is_cloud else tr["engine_local"]
         self._terminal_log(tr["log_engine_changed"].format(engine_name), "info")
+
+    def _on_cloud_provider_changed(self, _index: int) -> None:
+        """
+        patch_qt66 (2026-09-19, pedido explícito del usuario: "se me
+        acabaron los creditos, podemos usar el modelo de gemini
+        tambien?"): cambia de proveedor de Nube en caliente -- carga la
+        API key/modelo GUARDADOS de ese proveedor (cada uno vive en su
+        propia clave de QSettings, ver `_load_cloud_settings`) en vez de
+        dejar en el campo la key del proveedor anterior, que no le
+        serviría de nada a la API nueva.
+        """
+        provider = self.combo_cloud_provider.currentData()
+        if provider not in (
+            self.orchestrator.CLOUD_PROVIDER_ANTHROPIC,
+            self.orchestrator.CLOUD_PROVIDER_GEMINI,
+        ):
+            return
+        settings = QSettings("SovNode", "SovNode")
+        settings.setValue("cloud/provider", provider)
+        self._apply_cloud_key_field_for_provider(provider)
+
+        _is_gemini = provider == self.orchestrator.CLOUD_PROVIDER_GEMINI
+        _key_setting = "cloud/api_key_gemini" if _is_gemini else "cloud/api_key_anthropic"
+        _model_setting = (
+            "cloud/model_id_gemini" if _is_gemini else "cloud/model_id_anthropic"
+        )
+        _default_model = (
+            self.orchestrator.GEMINI_DEFAULT_MODEL if _is_gemini
+            else self.orchestrator.CLOUD_DEFAULT_MODEL
+        )
+        api_key = settings.value(_key_setting, "", type=str) or ""
+        model_id = settings.value(_model_setting, _default_model, type=str)
+        self.cloud_key_input.setText(api_key)
+        self.cloud_model_input.setText(model_id)
+
+        self.orchestrator.set_cloud_backend(
+            self.orchestrator.cloud_backend_enabled,
+            api_key=(api_key or None),
+            model_id=model_id,
+            provider=provider,
+        )
+        tr = I18N[self._current_lang]
+        self._terminal_log(
+            tr["log_cloud_provider_changed"].format(self.combo_cloud_provider.currentText()),
+            "info",
+        )
 
     def _on_cloud_budget_changed(self, _index: int) -> None:
         cents = self.combo_cloud_budget.currentData()
@@ -6495,10 +7012,92 @@ class MainWindow(QMainWindow):
     def _on_cloud_key_edited(self) -> None:
         api_key = self.cloud_key_input.text().strip()
         settings = QSettings("SovNode", "SovNode")
-        settings.setValue("cloud/api_key", api_key)
+        # patch_qt66 (2026-09-19): la key se guarda bajo la clave del
+        # PROVEEDOR activo, no en una sola clave compartida -- ver
+        # `_load_cloud_settings`. Para Anthropic se sigue escribiendo
+        # también la clave legacy `cloud/api_key`, por compatibilidad
+        # hacia atrás con una copia de la app sin este patch.
+        provider = (
+            self.combo_cloud_provider.currentData()
+            if hasattr(self, "combo_cloud_provider")
+            else self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        ) or self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        _is_gemini = provider == self.orchestrator.CLOUD_PROVIDER_GEMINI
+        settings.setValue(
+            "cloud/api_key_gemini" if _is_gemini else "cloud/api_key_anthropic", api_key
+        )
+        if not _is_gemini:
+            settings.setValue("cloud/api_key", api_key)
         self.orchestrator.set_cloud_backend(
             self.orchestrator.cloud_backend_enabled, api_key=(api_key or None)
         )
+
+    def _on_cloud_model_edited(self) -> None:
+        """
+        patch_qt67 (2026-09-19, bug real, MEDIDO -- ver el BLINDAJE junto
+        a "cloud_model_title" en I18N): guarda el ID de modelo tipeado a
+        mano, por PROVEEDOR (mismo criterio que la API key). Un campo
+        vacío cae al default de fábrica del proveedor activo en vez de
+        mandarle a la API un `model_id` vacío.
+        """
+        provider = (
+            self.combo_cloud_provider.currentData()
+            if hasattr(self, "combo_cloud_provider")
+            else self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        ) or self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        _is_gemini = provider == self.orchestrator.CLOUD_PROVIDER_GEMINI
+        _default_model = (
+            self.orchestrator.GEMINI_DEFAULT_MODEL if _is_gemini
+            else self.orchestrator.CLOUD_DEFAULT_MODEL
+        )
+        model_id = self.cloud_model_input.text().strip() or _default_model
+        self.cloud_model_input.setText(model_id)
+        settings = QSettings("SovNode", "SovNode")
+        settings.setValue(
+            "cloud/model_id_gemini" if _is_gemini else "cloud/model_id_anthropic",
+            model_id,
+        )
+        if not _is_gemini:
+            # Compatibilidad hacia atrás -- mismo criterio que la key.
+            settings.setValue("cloud/model_id", model_id)
+        self.orchestrator.set_cloud_backend(
+            self.orchestrator.cloud_backend_enabled, model_id=model_id
+        )
+        tr = I18N[self._current_lang]
+        self._terminal_log(tr["log_cloud_model_changed"].format(model_id), "info")
+
+    def _on_forget_cloud_key_clicked(self) -> None:
+        """
+        patch_qt65 (2026-09-18): borra la API key persistida en
+        QSettings("SovNode","SovNode") -- Registro de Windows, compartido
+        por cualquier copia/build de la app en este mismo usuario de
+        Windows -- y la limpia también del campo y de la sesión actual
+        en memoria (`orchestrator.cloud_api_key`). No apaga el backend
+        cloud ni borra el resto de la config (presupuesto, etc.), solo
+        la key.
+
+        patch_qt66 (2026-09-19): borra SOLO la key del proveedor
+        ACTIVO (Claude o Gemini, según el selector) -- las dos se
+        guardan por separado desde este patch, así que "olvidar" no
+        debe borrar la del otro proveedor que el usuario pueda tener
+        cargada.
+        """
+        tr = I18N[self._current_lang]
+        settings = QSettings("SovNode", "SovNode")
+        provider = (
+            self.combo_cloud_provider.currentData()
+            if hasattr(self, "combo_cloud_provider")
+            else self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        ) or self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        _is_gemini = provider == self.orchestrator.CLOUD_PROVIDER_GEMINI
+        settings.remove("cloud/api_key_gemini" if _is_gemini else "cloud/api_key_anthropic")
+        if not _is_gemini:
+            settings.remove("cloud/api_key")
+        self.cloud_key_input.clear()
+        self.orchestrator.set_cloud_backend(
+            self.orchestrator.cloud_backend_enabled, api_key=None
+        )
+        self._terminal_log(tr["log_cloud_key_forgotten"], "info")
 
     def _on_test_cloud_key_clicked(self) -> None:
         tr = I18N[self._current_lang]
@@ -6507,9 +7106,22 @@ class MainWindow(QMainWindow):
             self._terminal_log(tr["cloud_test_no_key"], "warn")
             return
         self.btn_test_cloud_key.setEnabled(False)
-        self._terminal_log(tr["cloud_test_testing"], "info")
+        # patch_qt66 (2026-09-19): prueba la conexión contra el
+        # proveedor ACTIVO -- ver `CloudKeyCheckWorker`, que ahora
+        # también sabe hablar con la Gemini API además de la de
+        # Anthropic.
+        provider = (
+            self.combo_cloud_provider.currentData()
+            if hasattr(self, "combo_cloud_provider")
+            else self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        ) or self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+        provider_label = (
+            self.combo_cloud_provider.currentText()
+            if hasattr(self, "combo_cloud_provider") else "Claude"
+        )
+        self._terminal_log(tr["cloud_test_testing"].format(provider_label), "info")
         model_id = self.orchestrator.cloud_model_id
-        self._cloud_key_worker = CloudKeyCheckWorker(api_key, model_id)
+        self._cloud_key_worker = CloudKeyCheckWorker(api_key, model_id, provider=provider)
         self._cloud_key_worker.completed.connect(self._on_cloud_key_tested)
         self._cloud_key_worker.start()
 
@@ -6542,6 +7154,13 @@ class MainWindow(QMainWindow):
 
     def _on_lang_changed(self, lang_name: str) -> None:
         self._current_lang = lang_name
+        # BLINDAJE (2026-09-19, patch_qt73 -- ver el BLINDAJE en
+        # `__init__` junto a la carga de `ui/language`): persiste la
+        # elección ACÁ, en el único lugar donde el usuario de verdad
+        # cambia de idioma (el combo `self.combo_lang`), para que la
+        # próxima vez que se abra SovNode arranque en este mismo idioma
+        # en vez de volver a "Español" por defecto.
+        QSettings("SovNode", "SovNode").setValue("ui/language", lang_name)
         self.orchestrator.set_language(lang_name)
         tr = I18N[lang_name]
 
@@ -6556,9 +7175,32 @@ class MainWindow(QMainWindow):
         self.engine_title_label.setText(tr["engine_title"])
         self.combo_engine.setItemText(0, tr["engine_local"])
         self.combo_engine.setItemText(1, tr["engine_cloud"])
-        self.cloud_key_input.setPlaceholderText(tr["cloud_key_placeholder"])
-        self.cloud_key_input.setToolTip(tr["cloud_key_tooltip"])
+        # patch_qt66 (2026-09-19): retraduce también el selector de
+        # proveedor de Nube y, según cuál esté activo, el placeholder/
+        # tooltip correcto del campo de key (antes esto último se
+        # retraducía siempre a los textos de Anthropic a secas).
+        if hasattr(self, "cloud_provider_label"):
+            self.cloud_provider_label.setText(tr["cloud_provider_title"])
+        if hasattr(self, "combo_cloud_provider"):
+            self.combo_cloud_provider.setItemText(0, tr["cloud_provider_anthropic"])
+            self.combo_cloud_provider.setItemText(1, tr["cloud_provider_gemini"])
+            self._apply_cloud_key_field_for_provider(
+                self.combo_cloud_provider.currentData()
+                or self.orchestrator.CLOUD_PROVIDER_ANTHROPIC
+            )
+        else:
+            self.cloud_key_input.setPlaceholderText(tr["cloud_key_placeholder"])
+            self.cloud_key_input.setToolTip(tr["cloud_key_tooltip"])
+        # patch_qt67 (2026-09-19): retraduce el campo de modelo editable.
+        if hasattr(self, "cloud_model_label"):
+            self.cloud_model_label.setText(tr["cloud_model_title"])
+        if hasattr(self, "cloud_model_input"):
+            self.cloud_model_input.setPlaceholderText(tr["cloud_model_placeholder"])
+            self.cloud_model_input.setToolTip(tr["cloud_model_tooltip"])
         self.btn_test_cloud_key.setText(tr["btn_test_cloud_key"])
+        if hasattr(self, "btn_forget_cloud_key"):
+            self.btn_forget_cloud_key.setText(tr["btn_forget_cloud_key"])
+            self.btn_forget_cloud_key.setToolTip(tr["btn_forget_cloud_key_tooltip"])
         self.cloud_budget_label.setText(tr["cloud_budget_title"])
         for _cb_i, _cb_cents in enumerate((1, 2, 4, 8)):
             self.combo_cloud_budget.setItemText(_cb_i, tr[f"cloud_budget_option_{_cb_cents}c"])
@@ -6613,6 +7255,19 @@ class MainWindow(QMainWindow):
             self.mic_button.setToolTip(tr["mic_tooltip"])
         if hasattr(self, "attach_button"):
             self.attach_button.setToolTip(tr["attach_tooltip"])
+
+        # patch_qt65 (2026-09-18, langfix): mismo bug de arriba, mismos
+        # 3 widgets del panel de consola que faltaban en esta lista
+        # (reportado por el usuario viendo "CONSOLA DE SISTEMA / LOGS" /
+        # "Terminal avanzada" / "Limpiar" en español con la UI en
+        # inglés, en una grabación de showcase).
+        if hasattr(self, "term_title"):
+            self.term_title.setText(tr["terminal_console_title"])
+        if hasattr(self, "btn_clear_term"):
+            self.btn_clear_term.setText(tr["btn_clear_terminal"])
+        if hasattr(self, "chk_advanced_terminal"):
+            self.chk_advanced_terminal.setText(tr["advanced_terminal_toggle"])
+            self.chk_advanced_terminal.setToolTip(tr["advanced_terminal_toggle_tooltip"])
 
         self._set_header_status_badge(self._last_web_mode)
         self._set_header_cost_badge()
@@ -7118,7 +7773,21 @@ class MainWindow(QMainWindow):
             self._terminal_log(
                 tr["log_workspaces_restored"].format(len(folders)), "info"
             )
-            if not self._workspace_watcher_started:
+            # patch_qt68 (2026-09-19, pedido explícito del usuario: "mejora
+            # el sistema de workspace si esta desactivado no deberia
+            # encenderse en ningun momento") -- solo arranca el watcher si
+            # las herramientas de workspace YA están habilitadas. Se lee
+            # QSettings directo acá, no `self.orchestrator.workspace_
+            # tools_enabled`, porque este método corre ANTES que
+            # `_load_cloud_settings()` en __init__ (ver el orden de los
+            # dos llamados ahí) -- a esta altura ese atributo todavía no
+            # se cargó desde disco y vale el default de fábrica (False),
+            # sin importar lo que el usuario haya dejado guardado. Ver el
+            # BLINDAJE completo junto a `_on_workspace_tools_toggled`.
+            _tools_enabled_now = QSettings("SovNode", "SovNode").value(
+                "workspace/tools_enabled", False, type=bool
+            )
+            if _tools_enabled_now and not self._workspace_watcher_started:
                 self._workspace_watcher.start()
                 self._workspace_watcher_started = True
 
@@ -7157,7 +7826,14 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._terminal_log(tr["log_workspace_persist_failed"].format(folder, exc), "warn")
 
-        if not self._workspace_watcher_started:
+        # patch_qt68 (2026-09-19): solo arranca el watcher si las
+        # herramientas de workspace ya están habilitadas -- ver el
+        # BLINDAJE junto a `_on_workspace_tools_toggled`. Con las
+        # herramientas apagadas, la carpeta queda agregada a la lista
+        # (`add_root` solo registra la ruta en memoria, no toca disco,
+        # ver workspace_watcher.py) pero no se escanea nada hasta que el
+        # usuario prenda el interruptor.
+        if self.orchestrator.workspace_tools_enabled and not self._workspace_watcher_started:
             self._workspace_watcher.start()
             self._workspace_watcher_started = True
 

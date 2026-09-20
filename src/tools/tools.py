@@ -1361,5 +1361,43 @@ TOOLS_SCHEMA = [
             "type": "object",
             "properties": {}
         }
+    },
+    {
+        # BLINDAJE (2026-09-19, patch_orchestrator104 -- ver el BLINDAJE
+        # largo junto a "web_search" en CLOUD_TOOLS_SCHEMA,
+        # orchestrator.py): esta entrada solo describe el schema para el
+        # protocolo JSON-en-texto que usa el motor Local (lo que
+        # `extract_tool_call` parsea) -- el CUERPO real de la ejecución
+        # NO vive en `LocalToolDispatcher`/`self.tools.execute()` como
+        # las demás (no necesita ni sandbox de disco ni de comandos):
+        # `Orchestrator.execute_tool_from_call` intercepta
+        # `tool_name == "web_search"` ANTES de llegar a
+        # `self.tools.execute(...)` y llama directo a
+        # `search_web_context` (web_search.py). Si algún día se llega a
+        # invocar igual `self.tools.execute("web_search", ...)` (no
+        # debería pasar en el flujo normal), simplemente no hay
+        # herramienta registrada con ese nombre en `_tools` y devuelve el
+        # error genérico de "Herramienta no disponible" -- mismo
+        # comportamiento inofensivo que cualquier nombre no registrado.
+        "name": "web_search",
+        "description": (
+            "Busca informacion actual/en tiempo real en internet -- precios, "
+            "resultados deportivos, noticias, la version mas reciente de algo, "
+            "o cualquier dato puntual del que no estes seguro y que pueda haber "
+            "cambiado. NO la uses para pedidos de codigo/edicion de archivos "
+            "(ni siquiera si mencionan 'juego'/'game' -- eso sigue siendo "
+            "SIEMPRE un pedido de edicion), ni para matematica o preguntas "
+            "sobre el workspace del usuario."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Consulta de busqueda concreta y autocontenida (resolvé vos mismo cualquier pronombre antes de llamar).",
+                }
+            },
+            "required": ["query"]
+        }
     }
 ]

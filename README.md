@@ -62,8 +62,22 @@ Most AI assistants ask you to trust a company with your prompts, your files, and
 ## 🖼 Demo
 
 <p align="center">
+  <img src="docs/Sovnode%20UI%20showcase.gif" width="800" alt="SovNode UI showcase">
+  <br><em>A tour of the interface — chat, workspace, engine settings, and console</em>
+</p>
+
+<br>
+
+<p align="center">
   <img src="docs/showcaseSovnode1.gif" width="800" alt="SovNode Interface Demo">
   <br><em>Streaming chat, routing, and tool calls</em>
+</p>
+
+<br>
+
+<p align="center">
+  <img src="docs/Sovnode%20improving%20mario%20code.gif" width="800" alt="SovNode improving a project's code end-to-end">
+  <br><em>Reading, editing, and iterating on a real file in the workspace</em>
 </p>
 
 <br>

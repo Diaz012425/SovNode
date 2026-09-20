@@ -1602,6 +1602,29 @@ class Orchestrator:
     # contra generaciones reales, mismo criterio que el resto de las
     # constantes de esta sección.
     FOLLOWUP_DECISION_NUM_PREDICT: int = 250
+    # BLINDAJE (2026-09-19, patch_orchestrator103 -- pedido explícito del
+    # usuario tras medir en vivo que incluso el reintento de
+    # `patch_orchestrator102` (el doble de `FOLLOWUP_DECISION_NUM_
+    # PREDICT`, 500) no alcanzaba para una explicación con varios
+    # encabezados y sub-viñetas -- turno "Improve space invaders game...
+    # and tell me what you did" terminó cortado en "Expanded the top
+    # interface to display remaining **Lives", sin cerrar el markdown ni
+    # completar el dato. El usuario propuso directamente subir el piso
+    # BASE de esta pasada (en vez de depender de un reintento que paga
+    # una llamada extra cada vez que no alcanza) a un valor entre 200 y
+    # 500 tokens: "que su explicacion quede en esos 200 tokens a 500
+    # tokens". Se separa en dos constantes en vez de una sola: cuando
+    # `_zero_chatter` (ver el BLINDAJE junto a `_EXPLICIT_EXPLANATION_
+    # REQUEST_RE`, patch_orchestrator100) detecta que el usuario pidió
+    # una explicación real, esta pasada usa este techo más grande (el
+    # extremo alto del rango que pidió el usuario) en vez del genérico
+    # `FOLLOWUP_DECISION_NUM_PREDICT` -- que se mantiene sin cambios
+    # para el caso normal de "confirmación breve de 1-2 frases", donde
+    # 250 sigue siendo de sobra y no hay motivo para gastar más. El
+    # reintento de patch102 (que duplica lo que sea que se haya usado
+    # como base) sigue existiendo como red de seguridad para el caso
+    # (más raro ahora) en que ni siquiera este techo más grande alcance.
+    FOLLOWUP_EXPLANATION_NUM_PREDICT: int = 500
     MAX_CONTEXT_CHARS_FOR_PROMPT: int = 1200
     MAX_TOOL_RESULT_CHARS_IN_PROMPT: int = 4000
     MAX_READ_FILE_RESULT_CHARS_IN_PROMPT: int = 12000
@@ -1743,6 +1766,90 @@ class Orchestrator:
         "claude-opus-4-5": (5.0, 25.0),
     }
     CLOUD_OUTPUT_BUDGET_SAFETY_FRACTION: float = 0.9
+
+    # BLINDAJE (2026-09-19, patch_orchestrator96 -- pedido explícito del
+    # usuario: "se me acabaron los creditos [de Claude], podemos usar el
+    # modelo de gemini tambien?"). Hasta acá el motor de Nube solo sabía
+    # hablar el formato de la Messages API de Anthropic (headers
+    # x-api-key/anthropic-version, bloques content[].type, cache_control,
+    # SSE con eventos tipados message_start/content_block_delta/
+    # message_delta) -- agregar Gemini es una integración nueva, no un
+    # simple cambio de URL: la Gemini Developer API
+    # (generativelanguage.googleapis.com) usa autenticación por header
+    # x-goog-api-key, cuerpo `contents`/`systemInstruction`/
+    # `generationConfig` en vez de `system`/`messages`/`max_tokens`,
+    # `tools[].functionDeclarations` en vez de `tools[].input_schema`,
+    # SSE con un objeto `candidates` completo por chunk (no eventos
+    # tipados), y nombres de campo de uso distintos
+    # (`usageMetadata.promptTokenCount`/`candidatesTokenCount` en vez de
+    # `usage.input_tokens`/`output_tokens`). Ver
+    # `_call_gemini_api_raw`/`_stream_gemini_api_raw` (paralelos directos
+    # de `_call_claude_api_raw`/`_stream_claude_api_raw`, mismo contrato
+    # de 3-tupla/generador -- por eso los 4 call sites que ya existían
+    # `_call_llm_raw`/`_stream_llm_raw`) y
+    # `_cloud_tools_schema_for_gemini` (mismo `CLOUD_TOOLS_SCHEMA` de
+    # siempre, reformateado).
+    #
+    # Selección MANUAL vía `self.cloud_provider`
+    # ("anthropic"|"gemini") -- se le ofrecieron al usuario 2 opciones
+    # (selector manual vs. fallback automático al agotarse el crédito de
+    # Claude) y eligió esta por ser más simple y no depender de parsear
+    # mensajes de error de cuota, que Anthropic no documenta con un
+    # código estable. Ver `set_cloud_backend`, ahora con un tercer
+    # parámetro `provider`. El resto del pipeline (bucle de
+    # tool-calling, blindaje de archivos, verificación, presupuesto
+    # dinámico) sigue sin enterarse de cuál de los dos respondió
+    # realmente, igual que ya pasaba entre Cloud/Local.
+    #
+    # Precios (`GEMINI_PRICING_USD_PER_MTOK`) tomados de
+    # ai.google.dev/gemini-api/docs/pricing el día de este patch, SOLO
+    # para los dos modelos más establecidos (2.5-flash/2.5-pro) -- NO
+    # calibrados contra uso real (mismo criterio que el resto de
+    # constantes de esta sección) y con la salvedad de que Google separa
+    # el precio de Gemini 2.5 Pro en dos tramos según el tamaño del
+    # prompt (≤200k / >200k tokens); acá se usa siempre el tramo ≤200k
+    # (el caso normal para este proyecto) por simplicidad -- un prompt
+    # excepcionalmente grande pagaría más en la factura real de lo que
+    # este archivo estima para el techo de presupuesto. Un `model_id`
+    # que no esté en esta tabla (p. ej. una versión más nueva que la que
+    # existía al escribir este patch) cae al precio de
+    # `GEMINI_DEFAULT_MODEL` para el cálculo de techo/costo estimado
+    # (mismo patrón de fallback que ya usa `CLOUD_PRICING_USD_PER_MTOK`
+    # para Anthropic) -- no revienta, pero el estimado deja de ser
+    # exacto hasta que se agregue esa entrada a mano. Revisar esa página
+    # antes de confiar en estos números a ciegas si pasa mucho tiempo
+    # entre este patch y su uso real: Google cambia precios y catálogo
+    # de modelos con frecuencia.
+    CLOUD_PROVIDER_ANTHROPIC: str = "anthropic"
+    CLOUD_PROVIDER_GEMINI: str = "gemini"
+    GEMINI_API_BASE: str = "https://generativelanguage.googleapis.com/v1beta/models"
+    # BLINDAJE (2026-09-19, patch_orchestrator97 -- bug real, MEDIDO en
+    # vivo por el usuario apenas probó "Probar conexión" con
+    # patch_orchestrator96 recién cargado): "gemini-2.5-flash" -- el
+    # default elegido en ese patch -- ya NO está disponible para cuentas
+    # nuevas ("This model models/gemini-2.5-flash is no longer available
+    # to new users. Please update your code to use models/gemini-3.6-
+    # flash..."), error real devuelto por la propia API de Google. El
+    # catálogo de modelos de Gemini cambia mucho más rápido que el de
+    # Anthropic (varias familias 3.x ya en catálogo el mismo mes que se
+    # escribió este archivo) -- default actualizado a "gemini-3.6-flash"
+    # (el reemplazo que la propia API sugirió) con su precio real
+    # ($0.75/$3.75 por MTok in/out, ai.google.dev/gemini-api/docs/
+    # pricing, promocional hasta 2026-12-31 -- sube a $1.50/$7.50 desde
+    # 2027-01-01, revisar esa fecha si este patch sigue vigente para
+    # entonces). Se agrega también un campo de MODELO editable en la UI
+    # (`cloud_model_input`, ver sovnode_qt.py patch_qt67) para que la
+    # próxima vez que Google jubile un modelo el usuario pueda pegar el
+    # ID nuevo sin esperar un patch de código -- este valor acá abajo
+    # solo importa como default de fábrica / fallback de precio para un
+    # `model_id` no listado en la tabla.
+    GEMINI_DEFAULT_MODEL: str = "gemini-3.6-flash"
+    GEMINI_PRICING_USD_PER_MTOK: Dict[str, Tuple[float, float]] = {
+        "gemini-3.6-flash": (0.75, 3.75),
+        "gemini-2.5-flash": (0.10, 0.40),
+        "gemini-2.5-pro": (1.25, 10.0),
+    }
+
     CLOUD_TOOLS_SCHEMA: List[Dict[str, Any]] = [
         {
             "name": "edit_file",
@@ -1822,6 +1929,70 @@ class Orchestrator:
                     },
                 },
                 "required": [],
+            },
+        },
+        {
+            # BLINDAJE (2026-09-19, patch_orchestrator104 -- rediseño
+            # pedido explícito por el usuario: "la 3 me parece perfecta",
+            # eligiendo la opción "convertir la búsqueda web en una
+            # herramienta más que el modelo pide por su cuenta" entre tres
+            # alternativas discutidas tras el bug de `patch_router2` --
+            # "add random cool things to the game" disparando una
+            # búsqueda web espuria porque un router determinista, SIN
+            # memoria de la conversación, tenía que adivinar de antemano
+            # si un turno necesitaba internet). Hasta este patch, la
+            # búsqueda web NUNCA fue una herramienta real: vivía
+            # enteramente en un pipeline aparte (`_should_force_web_
+            # search`/`SignalTag.WEB_SEARCH_INTENT`/`FACTUAL_ENUMERATION`,
+            # ver ese método) que decidía buscar o no ANTES de que el
+            # modelo viera el mensaje del usuario -- exactamente la razón
+            # de fondo por la que "el juego"/"code" sueltos podían
+            # confundirse con una pregunta de actualidad. Con esto, el
+            # modelo decide POR SU CUENTA, con la conversación completa
+            # ya en la cabeza (a diferencia del router, stateless), igual
+            # que ya decide cuándo llamar a `read_file`/`write_file` --
+            # cero heurística externa adivinando en su lugar. Ubicada
+            # ANTES de `run_cmd` (dentro del prefijo ESTABLE que nunca se
+            # excluye -- solo `write_file` se saca alguna vez de esta
+            # lista vía `exclude_tools`, ver el BLINDAJE de
+            # `patch_orchestrator88` más abajo) para no correr ningún
+            # checkpoint de `cache_control` existente.
+            #
+            # `_should_force_web_search` se achica en el mismo patch para
+            # dejar de forzar una búsqueda pre-emptiva solo por
+            # `SignalTag.WEB_SEARCH_INTENT` -- esa era justamente la señal
+            # responsable de la clase de bug que motivó este rediseño.
+            # `SignalTag.FACTUAL_ENUMERATION` SÍ se mantiene forzando
+            # (bug real y DISTINTO: un modelo local chico puede no saber
+            # que no sabe un dato -- ningún tool-calling nativo arregla
+            # eso, la única forma de corregir un dato mal memorizado
+            # sigue siendo inyectar evidencia externa de antemano).
+            "name": "web_search",
+            "description": (
+                "Busca informacion actual/en tiempo real en internet -- "
+                "precios, resultados deportivos, noticias, la version mas "
+                "reciente de algo, o cualquier dato puntual del que no "
+                "estes seguro y que pueda haber cambiado. NO uses esta "
+                "herramienta para pedidos de codigo/edicion de archivos "
+                "(incluso si mencionan 'juego'/'game' u otra palabra que "
+                "suene a busqueda -- 'agregale cosas geniales al juego' es "
+                "SIEMPRE un pedido de edicion, nunca de busqueda), ni para "
+                "matematica, conceptos generales, o preguntas sobre "
+                "archivos/codigo del workspace del usuario (para eso estan "
+                "read_file/list_dir). Formula una consulta especifica y "
+                "autocontenida (no un pronombre como 'eso' o 'la ultima' -- "
+                "resolve vos mismo a que se refiere usando el historial de "
+                "la conversacion antes de llamar a esta herramienta)."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Consulta de busqueda concreta y autocontenida (no un pronombre sin resolver).",
+                    },
+                },
+                "required": ["query"],
             },
         },
         {
@@ -2013,6 +2184,40 @@ class Orchestrator:
             if self._tool_currently_enabled(tool.get("name"))
             and tool.get("name") not in _exclude
         ]
+
+    def _cloud_tools_schema_for_gemini(
+        self, exclude_tools: Optional[Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        patch_orchestrator96 (2026-09-19) -- ver el BLINDAJE junto a
+        `GEMINI_API_BASE`. Igual que `_cloud_tools_schema_for_prompt`
+        pero reformateado al esquema de "function calling" de la Gemini
+        API: la Messages API de Anthropic espera
+        `tools: [{name, description, input_schema}, ...]` (una entrada
+        por herramienta); Gemini espera
+        `tools: [{functionDeclarations: [{name, description, parameters},
+        ...]}]` -- una sola entrada de nivel superior con la lista
+        adentro. Las dos hablan JSON Schema estándar para describir los
+        parámetros de cada herramienta, así que no hay que tocar ningún
+        esquema individual (`input_schema` se reusa tal cual como
+        `parameters`), solo envolverlos distinto y sacar `cache_control`
+        (propio de Anthropic -- Gemini no lo entiende y este endpoint no
+        tiene equivalente de "prompt caching manual").
+
+        Devuelve `[]` (sin la clave `tools` del todo, ver los llamadores)
+        si no queda ninguna herramienta habilitada, para no mandarle a la
+        API una lista de `functionDeclarations` vacía.
+        """
+        _base = self._cloud_tools_schema_for_prompt(exclude_tools=exclude_tools)
+        _decls = [
+            {
+                "name": tool.get("name"),
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+            }
+            for tool in _base
+        ]
+        return [{"functionDeclarations": _decls}] if _decls else []
 
     FAST_WRITE_MAX_REQUEST_WORDS: int = 45
 
@@ -3228,6 +3433,26 @@ class Orchestrator:
             # `num_predict` de cualquier pasada de este turno que pueda
             # terminar en un write_file sobre ESTE archivo.
             _modify_target_current_content: Optional[str] = None
+            # BLINDAJE (2026-09-19, patch_orchestrator110 -- bug real,
+            # MEDIDO en vivo: turno "improve the graphics of the game"
+            # sobre `mario.py` YA existente. El modelo leyó el archivo una
+            # vez (pass 1, llamada real) y después, dos pasadas seguidas,
+            # no emitió ninguna llamada -- `_salvage_file_operation`
+            # (más abajo) entra en su rama "es una modificación sobre un
+            # archivo que ya existe -> leerlo primero" (línea ~13609) y,
+            # como esa rama no sabía que el archivo YA se había leído en
+            # este mismo turno, sintetizó `read_file` de nuevo las dos
+            # veces -- 3 `read_file` seguidos disparó el guardia anti-
+            # bucle (`MAX_CONSECUTIVE_SAME_TOOL_CALLS`) y el turno terminó
+            # en "podrías reformular" sin haber intentado escribir el
+            # cambio ni una sola vez. Este set, poblado cada vez que un
+            # `read_file` real se ejecuta con éxito en este turno (ver más
+            # abajo, junto a `_modify_target_current_content = _rf_content`),
+            # se pasa a `_salvage_file_operation` para que, si el archivo
+            # objetivo YA está acá, la rama de arriba escale directo a
+            # generar el cambio (con el contenido real como contexto) en
+            # vez de releer un archivo que el modelo ya vio.
+            _paths_read_this_turn: Set[str] = set()
             if mod_is_modify:
                 _cur = self._read_workspace_file(mod_target)
                 _modify_target_current_content = _cur
@@ -3433,22 +3658,90 @@ class Orchestrator:
                 # code_text` pero para código GENERADO por el modelo,
                 # no pegado por el usuario -- no pisa el modo
                 # sugerencia (código pegado grande, caso distinto).
+                #
+                # BLINDAJE (2026-09-19, patch_orchestrator105 -- pedido
+                # explícito del usuario: "si se le pide mejoras a ese
+                # codigo que explique detalladamente... donde
+                # introducirlo... porque obviamente si se le pide que
+                # mejore el codigo sin el workspace va a reescribirlo
+                # todo"). Bug real: este bloque entero (reinyecta el
+                # código generado antes Y decide si activar el modo
+                # sugerencia de `_suggestion_mode_active` más abajo)
+                # dependía EXCLUSIVAMENTE de `SignalTag.CODE_COMPLEX`,
+                # la misma señal del router que ya se confirmó (ver
+                # patch_router2, `_GENERIC_EDIT_CONTINUATION_RE`) que
+                # NO dispara para un seguimiento genérico como "agrega
+                # cosas geniales al juego" -- exige un verbo de
+                # programación explícito o un juego nombrado. Un
+                # seguimiento típico ("mejora este código", "arreglalo",
+                # "optimizalo") sin ese vocabulario específico caía
+                # entero fuera de esta rama: el modelo ni siquiera
+                # recibía el código anterior reinyectado, mucho menos la
+                # instrucción de "explicá y ubicá, no reescribas todo".
+                # Se agrega `_FILE_MODIFY_VERB_RE` (la misma regex ya
+                # usada arriba para `_resolve_modify_target`/
+                # `mod_is_modify`, comprobada en producción) como
+                # condición alternativa -- no reemplaza `CODE_COMPLEX`,
+                # lo complementa, así que ningún turno que ya entraba
+                # acá deja de entrar. El umbral de tamaño que decide
+                # `_suggestion_mode_active` (0.6 del presupuesto,
+                # `_SUGGESTION_SIZE_SAFETY_RATIO`) NO se toca -- sigue
+                # siendo el mismo cálculo ya calibrado, esto solo
+                # asegura que el turno LLEGUE a evaluarlo.
                 _pasted_code_lines == 0
                 and not is_file_write
-                and SignalTag.CODE_COMPLEX in decision.tags
+                and (
+                    SignalTag.CODE_COMPLEX in decision.tags
+                    or self._FILE_MODIFY_VERB_RE.search(user_input)
+                )
                 and getattr(self, "_last_generated_code_text", "")
             ):
                 _last_gen_code_full = self._last_generated_code_text
                 _last_gen_code, _last_gen_code_truncated = (
                     self._cap_generated_code_for_reinjection(_last_gen_code_full)
                 )
-                if len(_last_gen_code_full) > _codegen_char_budget_estimate * _SUGGESTION_SIZE_SAFETY_RATIO:
-                    _suggestion_mode_active = True
-                    self._wal_phase(
-                        turn_id, "large_generated_code_suggestion_mode",
-                        chars=len(_last_gen_code_full),
-                        budget_estimate=_codegen_char_budget_estimate,
-                    )
+                # BLINDAJE (2026-09-19, patch_orchestrator106 -- pedido
+                # explícito del usuario, seguimiento directo de
+                # patch_orchestrator105: reportó con captura+log "give me
+                # an improve of the code because there is no map" sobre un
+                # juego base de Doom recién generado -- CON "Medio"
+                # seleccionado (no "Bajo") el modelo igual intentó
+                # reescribir el archivo entero (agregando un minimapa) y
+                # se cortó a mitad de una línea (`corrected_depth = depth
+                # * math.cos(player_angle -`), pese a que el propio
+                # `_codegen_char_budget_estimate`/techo (4800tok) no llegó
+                # a agotarse (2228tok de salida real). Causa: acá abajo,
+                # `_suggestion_mode_active` solo se activaba si el código
+                # anterior era GRANDE respecto al presupuesto del turno
+                # ACTUAL (`_SUGGESTION_SIZE_SAFETY_RATIO=0.6`) -- con
+                # "Medio" el presupuesto sube, así que ese mismo código
+                # (que con "Bajo" sí hubiera activado el modo) dejaba de
+                # verse "grande" en la proporción y el sistema decidía que
+                # una reescritura completa "entraba" -- exactamente lo
+                # opuesto de lo pedido ("si se le pide mejoras... que
+                # explique... porque obviamente si se le pide que mejore
+                # el codigo sin el workspace va a reescribirlo todo").
+                # Este bloque entero (el `elif` de arriba) YA sólo se
+                # alcanza para un seguimiento de mejora genuino sobre
+                # código ya generado, sin workspace disponible para ESTE
+                # turno (`not is_file_write`, ver la condición del
+                # `elif`) -- no hace falta ningún umbral de tamaño
+                # adicional para decidir SI conviene explicar en vez de
+                # reescribir: sin `write_file`/`edit_file` en este turno,
+                # reescribir significa siempre repetir el archivo entero
+                # como texto de chat, el mismo riesgo de corte que motivó
+                # patch_orchestrator105 en primer lugar. Se activa
+                # incondicionalmente acá (se saca la condición de tamaño,
+                # que sigue existiendo intacta en el bloque `if` de más
+                # arriba para código PEGADO por el usuario -- ese caso no
+                # se toca).
+                _suggestion_mode_active = True
+                self._wal_phase(
+                    turn_id, "large_generated_code_suggestion_mode",
+                    chars=len(_last_gen_code_full),
+                    budget_estimate=_codegen_char_budget_estimate,
+                    unconditional=True,
+                )
                 if not _last_gen_code_truncated:
                     _prompt_user_input = user_input + (
                         (
@@ -3736,6 +4029,128 @@ class Orchestrator:
                                 same_tier=_elev_same_tier,
                                 old_ceiling=gen_predict, new_ceiling=_elev_ceiling,
                                 floor=_min_viable_floor,
+                            )
+                            _elev_label_from = self._CLOUD_OUTPUT_BUDGET_CENTS_LABELS.get(_elev_from, _elev_from)
+                            _elev_label_to = self._CLOUD_OUTPUT_BUDGET_CENTS_LABELS.get(_elev_to, _elev_to)
+                            yield PipelineEvent(
+                                EventType.LOG,
+                                (
+                                    (
+                                        f"Budget widened within '{_elev_label_from}' itself "
+                                        "(this turn only, saved selector untouched): "
+                                        f"{gen_predict}tok doesn't clear this request's "
+                                        f"minimum viable floor ({_min_viable_floor}tok) -- "
+                                        f"using {_elev_ceiling}tok (still within "
+                                        f"'{_elev_label_from}''s range) for this turn."
+                                        if _elev_same_tier else
+                                        "Budget auto-raised for this turn only "
+                                        f"(saved selector untouched): "
+                                        f"'{_elev_label_from}' ({gen_predict}tok) doesn't "
+                                        "clear this request's minimum viable floor "
+                                        f"({_min_viable_floor}tok) -- bumping to "
+                                        f"'{_elev_label_to}' ({_elev_ceiling}tok) for this turn."
+                                    )
+                                    if effective_lang == "English" else
+                                    (
+                                        f"Presupuesto ampliado dentro de '{_elev_label_from}' "
+                                        "(solo este turno, tu selección guardada no cambia): "
+                                        f"{gen_predict}tok no alcanza el piso mínimo de este "
+                                        f"pedido ({_min_viable_floor}tok) -- usando "
+                                        f"{_elev_ceiling}tok (todavía dentro del rango de "
+                                        f"'{_elev_label_from}') para este turno."
+                                        if _elev_same_tier else
+                                        "Presupuesto elevado solo para este turno "
+                                        "(tu selección guardada no cambia): "
+                                        f"'{_elev_label_from}' ({gen_predict}tok) no alcanza el "
+                                        f"piso mínimo de este pedido ({_min_viable_floor}tok) "
+                                        f"-- subiendo a '{_elev_label_to}' ({_elev_ceiling}tok) "
+                                        "para este turno."
+                                    )
+                                ),
+                            )
+                            gen_predict = _elev_ceiling
+                    if gen_predict < _min_viable_floor:
+                        _codegen_budget_infeasible = True
+                        self._wal_phase(
+                            turn_id, "codegen_budget_infeasible",
+                            ceiling=gen_predict, floor=_min_viable_floor,
+                        )
+                elif not is_file_write and not self._is_file_read_turn(user_input, decision):
+                    # BLINDAJE (2026-09-19, patch_orchestrator111 -- pedido
+                    # explícito del usuario, reportado con captura+log:
+                    # "explain the mario code of the workspace" (workspace
+                    # ON, sin ninguna intención de escritura -- el turno
+                    # terminó en `list_dir` + `read_file` + una explicación
+                    # en prosa) igual disparó esta elevación de presupuesto
+                    # ("Bajo" (2400tok) -> "Medio" (6384tok)), pese a que el
+                    # usuario había elegido "Bajo" a propósito y el turno no
+                    # iba a escribir ni una línea de código. Pedido textual:
+                    # "que el analisis siempre quede por debajo de el techo
+                    # de el esfuerzo, lo de que pueda subir a medium es solo
+                    # cuando se pide crear un archivo desde 0 y de vez en
+                    # cuando cuando se busca y se edita un archivo porque si
+                    # no entonces para que esta [el selector]". Se agrega
+                    # `not self._is_file_read_turn(...)` -- si el turno es
+                    # claramente de LECTURA/ANÁLISIS (verbo de leer/explicar
+                    # + sin intención de escritura, ver `_is_file_read_turn`)
+                    # esta rama entera se salta y `gen_predict` se queda tal
+                    # cual el selector guardado del usuario lo dejó, sin
+                    # elevación -- el análisis se recorta/trunca dentro de
+                    # ESE techo en vez de subirlo en silencio. Con workspace
+                    # DESACTIVADO (el caso original de patch_orchestrator105,
+                    # "Give me a base game of slither.io with bots")
+                    # `_is_file_read_turn` da `False` de entrada (exige
+                    # `_turn_wants_file_tools`, que a su vez exige
+                    # herramientas de workspace activas) -- ese caso motivador
+                    # sigue elevando exactamente igual que antes.
+                    #
+                    # BLINDAJE (2026-09-19, patch_orchestrator105 -- pedido
+                    # explícito del usuario: "si no puede con el esfuerzo
+                    # bajo que lo suba a medio para generar el codigo base",
+                    # reportado con captura+log de "Give me a base game of
+                    # slither.io with bots" con las herramientas de
+                    # workspace DESACTIVADAS devolviendo código cortado a
+                    # mitad de una clase pese a que el propio modelo
+                    # afirmaba que estaba completo. Causa raíz: este mismo
+                    # mecanismo de elevación (`_elevate_codegen_ceiling_
+                    # if_needed`, ya probado en producción para `write_file`
+                    # de archivo nuevo desde patch_orchestrator82/83)
+                    # estaba condicionado a `is_file_write and not
+                    # mod_is_modify` -- el carril de "código en el chat"
+                    # (herramientas de workspace apagadas, sin ninguna
+                    # llamada a `write_file`) nunca lo ejecutaba, así que
+                    # con "Bajo" (~900tok) seleccionado ese carril solo
+                    # recibía el aviso [OUTPUT BUDGET] de más abajo
+                    # pidiéndole al modelo que recorte alcance -- pero el
+                    # TECHO DURO real que la API iba a cortar seguía siendo
+                    # 900tok, insuficiente incluso para la versión más
+                    # chica de un juego con bots (ningún recorte de
+                    # alcance salva un techo por debajo del piso técnico
+                    # mínimo). Mismo mecanismo que ya funciona para
+                    # `write_file`, extendido acá SOLO para este carril
+                    # (nunca toca la rama `is_file_write and not
+                    # mod_is_modify` de arriba, que sigue exactamente
+                    # igual) -- eleva el techo real SOLO este turno (el
+                    # selector guardado del usuario no cambia) cuando
+                    # "Bajo" no alcanza ni para el piso mínimo, y si ni
+                    # "Alto"/"Extra" alcanzan, cae en el mismo bailout de
+                    # `_codegen_budget_infeasible` de más abajo (cero
+                    # tokens de LLM gastados en un intento condenado a
+                    # cortarse a mitad de camino).
+                    if gen_predict < _min_viable_floor:
+                        _elev_from, _elev_to, _elev_ceiling = (
+                            self._elevate_codegen_ceiling_if_needed(
+                                gen_predict, _min_viable_floor
+                            ) if _cloud_budget_active else (None, None, gen_predict)
+                        )
+                        if _elev_to is not None:
+                            _elev_same_tier = (_elev_from == _elev_to)
+                            self._wal_phase(
+                                turn_id, "codegen_budget_tier_elevated",
+                                from_cents=_elev_from, to_cents=_elev_to,
+                                same_tier=_elev_same_tier,
+                                old_ceiling=gen_predict, new_ceiling=_elev_ceiling,
+                                floor=_min_viable_floor, chat_lane=True,
                             )
                             _elev_label_from = self._CLOUD_OUTPUT_BUDGET_CENTS_LABELS.get(_elev_from, _elev_from)
                             _elev_label_to = self._CLOUD_OUTPUT_BUDGET_CENTS_LABELS.get(_elev_to, _elev_to)
@@ -4606,13 +5021,12 @@ class Orchestrator:
                         EventType.LOG,
                         (
                             f"File-op guard: write_file for '{_ceiling_path}' hit Sonnet's "
-                            "per-turn budget — finishing the file locally (Ollama, no extra "
-                            "API cost) instead of paying for a second Cloud pass."
+                            "per-turn budget — finishing the file with a second Cloud pass "
+                            "(fast) instead of waiting on the local engine."
                             if effective_lang == "English" else
                             f"Blindaje de archivos: write_file de '{_ceiling_path}' llegó al "
-                            "presupuesto de Sonnet por turno — completando el archivo en el "
-                            "motor Local (Ollama, sin costo extra de API) en vez de pagar una "
-                            "segunda pasada en Cloud."
+                            "presupuesto de Sonnet por turno — completando el archivo con una "
+                            "segunda pasada en Cloud (rápido) en vez de esperar al motor Local."
                         ),
                     )
                     tool_call = self._continue_truncated_file_write_locally(
@@ -4629,15 +5043,14 @@ class Orchestrator:
                         (
                             f"File-op guard: edit_file for '{_ceiling_path}' hit Sonnet's "
                             "per-turn budget — the cut-off diff is discarded (it's unsafe to "
-                            "splice a truncated JSON edit) and redone from scratch locally "
-                            "(Ollama, no extra API cost) instead of paying for a second Cloud "
-                            "pass."
+                            "splice a truncated JSON edit) and redone from scratch with a "
+                            "second Cloud pass (fast) instead of waiting on the local engine."
                             if effective_lang == "English" else
                             f"Blindaje de archivos: edit_file de '{_ceiling_path}' llegó al "
                             "presupuesto de Sonnet por turno — se descarta el diff cortado (no "
                             "es seguro empalmar un JSON de edición a mitad de camino) y se "
-                            "rehace desde cero en el motor Local (Ollama, sin costo extra de "
-                            "API) en vez de pagar una segunda pasada en Cloud."
+                            "rehace desde cero con una segunda pasada en Cloud (rápido) en vez "
+                            "de esperar al motor Local."
                         ),
                     )
                     tool_call = self._rescue_truncated_edit_file_locally(
@@ -4685,6 +5098,7 @@ class Orchestrator:
                 salvage_call, salvage_raw = self._salvage_file_operation(
                     user_input, raw_response, decision, effective_lang,
                     active_model=active_model, log_cb=log_cb,
+                    already_read_paths=_paths_read_this_turn,
                 )
                 for pending_log in log_buffer:
                     yield PipelineEvent(EventType.LOG, pending_log)
@@ -4806,7 +5220,9 @@ class Orchestrator:
                 )
                 self._wal_phase(turn_id, "tool_call", tool=tool_name, pass_number=tool_pass)
                 with self._profile_stage("tools", tool=tool_name):
-                    tool_result = self.execute_tool_from_call(tool_call)
+                    tool_result = self.execute_tool_from_call(
+                        tool_call, lang=effective_lang, log_cb=log_cb,
+                    )
                 self._wal_phase(turn_id, "tool_result", tool=tool_name, chars=len(str(tool_result)))
                 yield PipelineEvent(
                     EventType.TOOL_CALL_RESULT, tool_result,
@@ -4970,12 +5386,24 @@ class Orchestrator:
                     tool_name == "read_file"
                     and not self._is_internal_toolguard_notice(tool_result)
                     and "[SANDBOX WRITE ERROR]" not in str(tool_result)
-                    and not _modify_target_current_content
                 ):
                     _rf_path = str(tool_call.get("parameters", {}).get("path") or "")
-                    _rf_content = self._read_workspace_file(_rf_path) or ""
-                    if _rf_path and _rf_content:
-                        _modify_target_current_content = _rf_content
+                    # BLINDAJE (2026-09-19, patch_orchestrator110 -- ver el
+                    # comentario junto a la declaración de
+                    # `_paths_read_this_turn`, más arriba): registrar ESTE
+                    # read_file exitoso sin importar si ya había un archivo
+                    # de referencia fijado -- a diferencia de
+                    # `_modify_target_current_content` (que solo guarda el
+                    # PRIMER archivo de referencia del turno), acá interesa
+                    # cada lectura real, para que `_salvage_file_operation`
+                    # nunca sintetice un `read_file` repetido sobre un
+                    # archivo que el modelo ya vio en este mismo turno.
+                    if _rf_path:
+                        _paths_read_this_turn.add(_rf_path)
+                    if not _modify_target_current_content:
+                        _rf_content = self._read_workspace_file(_rf_path) or ""
+                        if _rf_path and _rf_content:
+                            _modify_target_current_content = _rf_content
 
                 if (
                     skeleton_match is not None
@@ -5054,15 +5482,55 @@ class Orchestrator:
                     or is_internal_toolguard_notice
                     or bool(_last_file_op_confirmation)
                 )
-                _zero_chatter = (
-                    "Si la herramienta se ejecutó bien y no hay ningún error ni nada "
-                    "relevante extra que el usuario deba saber, respondé con una "
-                    "confirmación breve de 1-2 frases (qué se hizo, nada más) -- prohibido "
-                    "agregar preguntas de seguimiento o sugerencias de mejora que nadie "
-                    "pidió (si el usuario quiere algo más, lo va a pedir él mismo en su "
-                    "próximo mensaje). Si hubo un error o hay algo importante que explicar, "
-                    "explicalo con el detalle que haga falta."
+                # BLINDAJE (2026-09-19, patch_orchestrator100 -- bug real,
+                # MEDIDO en vivo por el usuario: turno "añade cosas al
+                # codigo y explica que añadiste" sobre `minesweeper.py`
+                # (Gemini) terminó en "He añadido las siguientes
+                # funcionalidades" y NADA más -- la pasada de cierre
+                # gastó apenas 5 tokens de salida en total. No es el bug
+                # de truncamiento de `patch_orchestrator98` (finishReason
+                # fue STOP genuino, no MAX_TOKENS/otro corte) ni tampoco
+                # el de ruteo de `patch_orchestrator89` (el archivo se
+                # identificó y editó bien, 2981->4554 bytes) -- es que
+                # `_zero_chatter`, de acá abajo, le pide SIEMPRE al modelo
+                # "confirmación breve de 1-2 frases" tras una herramienta
+                # exitosa, sin importar si el usuario pidió explícitamente
+                # una explicación en SU PROPIO mensaje de este turno. El
+                # usuario preguntó, sin saber todavía que era
+                # reproducible: "no explico lo que metio, creo que porque
+                # se corto" -- no se cortó (no hay señal de truncamiento),
+                # el modelo simplemente tomó "sé breve" al pie de la letra
+                # y escribió solo la frase introductoria de una lista que
+                # nunca llegó a enumerar. Fix: si el `user_input` de este
+                # turno contiene un pedido explícito de explicación/
+                # detalle (`_EXPLICIT_EXPLANATION_REQUEST_RE`, nueva),
+                # `_zero_chatter` deja de pedir brevedad para esta pasada
+                # -- el pedido explícito del usuario dentro del turno
+                # pesa más que la brevedad por default. Sin ese pedido
+                # explícito, comportamiento IDÉNTICO al de antes.
+                _wants_explicit_explanation = bool(
+                    self._EXPLICIT_EXPLANATION_REQUEST_RE.search(user_input or "")
                 )
+                if _wants_explicit_explanation:
+                    _zero_chatter = (
+                        "El usuario pidió explícitamente, en este mismo turno, que "
+                        "expliques qué hiciste/añadiste/cambiaste -- NO te limites a una "
+                        "confirmación breve de 1-2 frases acá: contale con el detalle "
+                        "real qué se modificó y por qué (sin volver a pegar el código "
+                        "completo del archivo, eso no es una explicación). Si hubo un "
+                        "error o hay algo importante que explicar, explicalo con el "
+                        "detalle que haga falta."
+                    )
+                else:
+                    _zero_chatter = (
+                        "Si la herramienta se ejecutó bien y no hay ningún error ni nada "
+                        "relevante extra que el usuario deba saber, respondé con una "
+                        "confirmación breve de 1-2 frases (qué se hizo, nada más) -- prohibido "
+                        "agregar preguntas de seguimiento o sugerencias de mejora que nadie "
+                        "pidió (si el usuario quiere algo más, lo va a pedir él mismo en su "
+                        "próximo mensaje). Si hubo un error o hay algo importante que explicar, "
+                        "explicalo con el detalle que haga falta."
+                    )
                 closing_instruction = (
                     "Redacta únicamente una explicación en lenguaje natural. "
                     "Prohibido generar más JSON. " + _zero_chatter
@@ -5521,6 +5989,23 @@ class Orchestrator:
                 # `_call_llm_raw` (mismo núcleo, YA usado en ~10 lugares
                 # de este archivo) expone `done_reason` sin tocar el
                 # contrato de ningún otro llamador de `_call_llm`.
+                # BLINDAJE (2026-09-19, patch_orchestrator103 -- ver el
+                # BLINDAJE junto a `FOLLOWUP_EXPLANATION_NUM_PREDICT`): el
+                # techo de 250 de `FOLLOWUP_DECISION_NUM_PREDICT`, de abajo,
+                # alcanza para "confirmación breve de 1-2 frases" pero no
+                # para una explicación real con varios encabezados/viñetas
+                # cuando `_wants_explicit_explanation` (patch_orchestrator100,
+                # más arriba) es True -- medido en vivo: turno "mejora ese
+                # código y decime qué implementaste" sobre space_invaders
+                # terminó cortado ("**`space) incluso DESPUÉS del reintento
+                # de patch_orchestrator102. Se calcula acá una única base
+                # (reusada también por ese reintento, más abajo) para que
+                # ambos queden alineados con el mismo criterio.
+                _followup_base_num_predict = (
+                    self.FOLLOWUP_EXPLANATION_NUM_PREDICT
+                    if _wants_explicit_explanation else
+                    self.FOLLOWUP_DECISION_NUM_PREDICT
+                )
                 explanation_or_next, _toolcall_eval_count, _toolcall_done_reason = self._call_llm_raw(
                     followup, target_model=active_model, lang_override=effective_lang,
                     system_override=gen_system,
@@ -5531,7 +6016,11 @@ class Orchestrator:
                         # desde cero, así que no necesita el mismo techo
                         # grande que la escritura real (ver el BLINDAJE
                         # junto a `FOLLOWUP_DECISION_NUM_PREDICT`).
-                        self.FOLLOWUP_DECISION_NUM_PREDICT
+                        # patch_orchestrator103: salvo que el usuario haya
+                        # pedido explícitamente una explicación real en este
+                        # turno, en cuyo caso usa el techo más grande de
+                        # `FOLLOWUP_EXPLANATION_NUM_PREDICT` (ver arriba).
+                        _followup_base_num_predict
                         if (_file_created_this_turn_path and wants_file_tools) else
                         self._effective_codegen_num_predict(
                             _modify_target_current_content,
@@ -5663,14 +6152,13 @@ class Orchestrator:
                             (
                                 f"File-op guard: write_file for '{_ceiling_path_inloop}' hit "
                                 "Sonnet's per-turn budget inside the tool loop — finishing "
-                                "the file locally (Ollama, no extra API cost) instead of "
-                                "paying for a second Cloud pass."
+                                "the file with a second Cloud pass (fast) instead of waiting "
+                                "on the local engine."
                                 if effective_lang == "English" else
                                 f"Blindaje de archivos: write_file de '{_ceiling_path_inloop}' "
                                 "llegó al presupuesto de Sonnet por turno dentro del bucle de "
-                                "herramientas — completando el archivo en el motor Local "
-                                "(Ollama, sin costo extra de API) en vez de pagar una segunda "
-                                "pasada en Cloud."
+                                "herramientas — completando el archivo con una segunda pasada "
+                                "en Cloud (rápido) en vez de esperar al motor Local."
                             ),
                         )
                         next_tool_call = self._continue_truncated_file_write_locally(
@@ -5691,15 +6179,15 @@ class Orchestrator:
                                 f"File-op guard: edit_file for '{_ceiling_path_inloop}' hit "
                                 "Sonnet's per-turn budget inside the tool loop — the cut-off "
                                 "diff is discarded (unsafe to splice a truncated JSON edit) "
-                                "and redone from scratch locally (Ollama, no extra API cost) "
-                                "instead of paying for a second Cloud pass."
+                                "and redone from scratch with a second Cloud pass (fast) "
+                                "instead of waiting on the local engine."
                                 if effective_lang == "English" else
                                 f"Blindaje de archivos: edit_file de '{_ceiling_path_inloop}' "
                                 "llegó al presupuesto de Sonnet por turno dentro del bucle de "
                                 "herramientas — se descarta el diff cortado (no es seguro "
                                 "empalmar un JSON de edición a mitad de camino) y se rehace "
-                                "desde cero en el motor Local (Ollama, sin costo extra de "
-                                "API) en vez de pagar una segunda pasada en Cloud."
+                                "desde cero con una segunda pasada en Cloud (rápido) en vez de "
+                                "esperar al motor Local."
                             ),
                         )
                         next_tool_call = self._rescue_truncated_edit_file_locally(
@@ -5707,6 +6195,98 @@ class Orchestrator:
                             lang_override=effective_lang, gen_system=gen_system,
                             log_cb=log_cb,
                         )
+                # BLINDAJE (2026-09-19, patch_orchestrator102 -- bug real,
+                # MEDIDO vía WAL/debug log en vivo: turno "improve that
+                # code and tell me what you implement" [turn_id
+                # ddbea5ae-aefa-4334-9e2e-113379df6938]. La pasada de
+                # CIERRE (después de un write_file/edit_file exitoso,
+                # `is_last_allowed_pass=True`, sin más tool calls
+                # permitidos) devolvió `done_reason=length` con apenas
+                # ~9 tokens de salida -- el texto visible terminó
+                # literalmente "Here are the improvements implemented in
+                # **`space", cortado a mitad de una palabra. El rescate
+                # de arriba (líneas previas de este mismo bloque) SOLO
+                # dispara cuando `next_tool_call` es un write_file/
+                # edit_file real -- en esta pasada `next_tool_call` es
+                # SIEMPRE `None` (ver más arriba: "None if
+                # is_last_allowed_pass else..."), así que ese `if` nunca
+                # podía ser verdadero acá, sin importar cuán cortada
+                # haya quedado la prosa. `sovnode_debug.log`
+                # ([EmptyResponseDiag]) confirma que el texto NO llegó
+                # vacío (`raw_len=179`), así que la garantía de
+                # `resolve_visible_answer` tampoco tenía motivo para
+                # intervenir -- esa garantía es solo contra respuesta
+                # VACÍA, no contra una respuesta corta/cortada a mitad
+                # de palabra. El resultado: el texto truncado se
+                # mostraba tal cual, sin ningún intento de completarlo,
+                # en CUALQUIER pasada de cierre de pura prosa (sin tool
+                # call de por medio) que termine con `done_reason=
+                # length` -- no es específico de Gemini ni de este
+                # turno puntual, es un hueco estructural del bucle.
+                #
+                # Fix: mismo criterio de "reintentar una sola vez con
+                # más presupuesto" que ya usa el bloque de arriba para
+                # write_file/edit_file truncado ("regenerating once with
+                # the full codegen budget") -- si la pasada de cierre
+                # (sin tool call, `is_last_allowed_pass=True`) terminó
+                # con `done_reason=length`, se reintenta UNA vez con el
+                # DOBLE de `FOLLOWUP_DECISION_NUM_PREDICT` (sigue siendo
+                # chico frente al techo real de codegen -- esto es
+                # prosa de cierre, no código nuevo) y se usa ese
+                # resultado si no vino vacío ni con un error explícito.
+                # Si el reintento TAMBIÉN se corta, se deja igual (ya es
+                # lo mejor que se consiguió con el doble de presupuesto,
+                # más texto que la versión original cortada) en vez de
+                # reintentar sin límite -- mismo espíritu de "un solo
+                # reintento gratuito, nunca un bucle sin fin" que ya usan
+                # todos los demás rescates de este archivo.
+                if (
+                    next_tool_call is None
+                    and is_last_allowed_pass
+                    and _toolcall_done_reason == "length"
+                    and not cancelled()
+                ):
+                    self._wal_phase(
+                        turn_id, "closing_explanation_truncated_retry",
+                        original_len=len(explanation_or_next or ""),
+                    )
+                    yield PipelineEvent(
+                        EventType.LOG,
+                        (
+                            "Closing explanation got cut off mid-sentence — "
+                            "retrying once with a larger budget instead of "
+                            "showing the truncated text."
+                            if effective_lang == "English" else
+                            "La explicación de cierre se cortó a mitad de una "
+                            "frase — reintentando una vez con más presupuesto "
+                            "en vez de mostrar el texto cortado."
+                        ),
+                    )
+                    (
+                        _closing_retry_text, _closing_retry_eval,
+                        _closing_retry_done,
+                    ) = self._call_llm_raw(
+                        followup, target_model=active_model, lang_override=effective_lang,
+                        system_override=gen_system,
+                        # BLINDAJE (2026-09-19, patch_orchestrator103): antes
+                        # era siempre `FOLLOWUP_DECISION_NUM_PREDICT * 2`
+                        # (500), fijo, sin importar qué techo se usó
+                        # realmente en la pasada original que se cortó. Ahora
+                        # duplica `_followup_base_num_predict` (calculado
+                        # arriba, junto a la llamada original) -- si el
+                        # usuario pidió explicación explícita, eso ya arranca
+                        # en `FOLLOWUP_EXPLANATION_NUM_PREDICT` (500) y este
+                        # reintento sube a 1000; si no, sigue siendo el mismo
+                        # 250->500 de siempre.
+                        num_predict_override=_followup_base_num_predict * 2,
+                        log_cb=log_cb, perf_label=f"ToolCall-P{tool_pass + 1}-closing-retry",
+                        suppress_write_file=(
+                            _suppress_write_file_for_turn
+                            or bool(_file_created_this_turn_path)
+                        ),
+                    )
+                    if _closing_retry_text and not _closing_retry_text.lstrip().startswith("[ERROR"):
+                        explanation_or_next = _closing_retry_text
                 # BLINDAJE (2026-09-18, patch_orchestrator73 -- pedido
                 # explícito del usuario tras patch_orchestrator72: "si se le
                 # pide un prompt similar diferente, va a seguir cometiendo el
@@ -5761,6 +6341,7 @@ class Orchestrator:
                     _inloop_salvage_call, _inloop_salvage_raw = self._salvage_file_operation(
                         user_input, explanation_or_next, decision, effective_lang,
                         active_model=active_model, log_cb=log_cb,
+                        already_read_paths=_paths_read_this_turn,
                     )
                     if _inloop_salvage_raw is not None:
                         explanation_or_next = _inloop_salvage_raw
@@ -6829,6 +7410,23 @@ class Orchestrator:
                 effective_lang=effective_lang, turn_id=turn_id, log_cb=log_cb,
                 suggestion_mode=_suggestion_mode_active,
             )
+            # BLINDAJE (2026-09-19, patch_orchestrator108 -- ver el
+            # docstring de `_build_workspace_upsell_tip`): apéndice
+            # DETERMINÍSTICO, no delegado al modelo -- cualquier turno que
+            # terminó en modo sugerencia (`_suggestion_mode_active`,
+            # código ya mostrado antes que el modelo explicó/ubicó en vez
+            # de reescribir) con el workspace todavía apagado cierra
+            # SIEMPRE con la recomendación de activarlo y guardar el
+            # código ahí, para que los próximos seguimientos se resuelvan
+            # con `edit_file` real en vez de seguir acumulando explicación
+            # en el chat. Se agrega DESPUÉS de `_verify_and_fix_python_
+            # syntax` (para no interferir con su detección/arreglo de
+            # bloques ```python) y ANTES de capturar `_last_generated_
+            # code_text` más abajo -- `_max_pasted_code_block_text` solo
+            # mira bloques ```code```, así que este texto plano no se
+            # confunde con código reinyectable en el próximo turno.
+            if _suggestion_mode_active and not self._workspace_tools_are_enabled():
+                final_response = final_response + self._build_workspace_upsell_tip(effective_lang)
             # BLINDAJE (pedido explícito del usuario, 2026-09-16 --
             # ver el docstring de patch_orchestrator37.py): se
             # recuerda el bloque de código más largo de ESTA
@@ -7129,13 +7727,67 @@ class Orchestrator:
 
     _BULLET_PREFIX_RE: Pattern[str] = re.compile(r"^[ \t]*(?:[-*•]|\d+[.)])[ \t]*$")
 
+    # BLINDAJE (2026-09-19, patch_orchestrator107 -- bug real, MEDIDO en
+    # vivo por el usuario: captura+log de "improve this code" sobre
+    # agar_io.py -- el turno terminó con el log "Duplicate/degenerate
+    # enumeration items trimmed." y la respuesta visible se cortaba justo
+    # al empezar el ítem 2 ("2. Optimize Collision Calculations...")
+    # SIN texto debajo, pese a que el modelo terminó su generación entera
+    # sin agotar el techo de tokens (1733tok de 6384tok de techo). Causa
+    # raíz: `_suggestion_mode_active` (ver `patch_orchestrator37`/`105`/
+    # `106`, el modo "explicá y ubicá en vez de reescribir") le pide al
+    # modelo estructurar cada mejora como Issue/Solution/Exact Location
+    # (o "Problema"/"Solución"/"Ubicación exacta" en español) -- un
+    # patrón perfectamente sano donde CADA ítem de la lista repite las
+    # MISMAS tres etiquetas en negrita ("**Issue**:", "**Solution**:",
+    # "**Exact Location**:"). Esto es EXACTAMENTE lo que
+    # `_ENUMERATION_ITEM_TITLE_RE` (`\*\*(...)\*\*\s*:`) matchea, y la
+    # versión anterior de este método marcaba como "bucle degenerativo"
+    # (el bug real que este método fue escrito para atajar, ver el
+    # comentario de `_DEGENERATE_REPEAT_RE` más arriba) la SEGUNDA vez
+    # que aparecía "**Issue**:" en todo el texto -- sin distinguir "el
+    # modelo repitió el título de UN SOLO ítem sin avanzar" (el bug
+    # real) de "el modelo avanzó a un ítem NUEVO y reusó la misma
+    # etiqueta de sub-estructura" (este caso, sano). Resultado: cualquier
+    # explicación de 2+ mejoras con este formato se cortaba SIEMPRE en el
+    # segundo ítem, exactamente el estilo de respuesta que
+    # `patch_orchestrator106` acaba de volver el comportamiento DEFAULT
+    # para seguimientos de mejora sin workspace -- este bug se volvió
+    # mucho más visible como consecuencia directa de ese mismo fix.
+    #
+    # Fix: en vez de cortar apenas se repite el título normalizado, se
+    # exige ADEMÁS que entre la ocurrencia anterior y esta NO haya
+    # aparecido ningún marcador de ítem de nivel superior (encabezado
+    # Markdown `#`/`##`/etc., o el inicio de un ítem numerado/con viñeta
+    # -- `_TOP_LEVEL_ITEM_MARKER_RE` de abajo). Si SÍ apareció uno, el
+    # modelo avanzó de verdad a contenido nuevo entre ambas apariciones
+    # -- se actualiza el registro de "última posición vista" para ese
+    # título y se sigue escaneando, sin cortar. Si NO apareció ninguno
+    # (el patrón original del bug: el mismo título vuelve a aparecer sin
+    # que haya arrancado ningún ítem nuevo en el medio -- literalmente
+    # sin avance), se corta exactamente como antes. No se toca
+    # `_DEGENERATE_REPEAT_RE`/`_looks_degenerate_repetition` (mecanismo
+    # de bucle a nivel de caracteres, problema distinto, ver su propio
+    # BLINDAJE) ni `_BULLET_PREFIX_RE` (mismo uso que antes, para no
+    # cortar a mitad de la línea del propio marcador de viñeta).
+    _TOP_LEVEL_ITEM_MARKER_RE: Pattern[str] = re.compile(
+        r"^[ \t]*(?:#{1,6}[ \t]|\d+[.)][ \t]|[-*•][ \t])",
+        re.MULTILINE,
+    )
+
     @classmethod
     def _dedupe_enumeration_items(cls, text: str) -> Tuple[str, bool]:
         """
         Trunca una enumeración en el punto donde el título en negrita de
-        un ítem ("**Título**:") se repite igual a uno anterior — señal de
-        que el modelo entró en un bucle degenerativo (ver BLINDAJE
-        arriba). Devuelve `(texto_resultante, hubo_recorte)`.
+        un ítem ("**Título**:") se repite igual a uno anterior SIN que
+        haya arrancado ningún ítem nuevo en el medio (ver BLINDAJE
+        arriba) — señal de que el modelo entró en un bucle degenerativo
+        repitiendo el mismo título sin avanzar. Un título que se repite
+        porque es una sub-etiqueta de estructura reutilizada en cada
+        ítem nuevo (p. ej. "Issue"/"Solution"/"Exact Location" del modo
+        sugerencia) NO cuenta como bucle -- se detecta porque SÍ hay un
+        marcador de ítem nuevo entre ambas apariciones. Devuelve
+        `(texto_resultante, hubo_recorte)`.
         """
         if not text or not text.strip():
             return text, False
@@ -7144,19 +7796,22 @@ class Orchestrator:
         if len(matches) < 2:
             return text, False
 
-        seen = set()
+        last_end: Dict[str, int] = {}
         for match in matches:
             normalized = " ".join(match.group(1).split()).casefold()
-            if normalized in seen:
-                cut_at = match.start()
-                line_start = text.rfind("\n", 0, cut_at) + 1
-                if cls._BULLET_PREFIX_RE.match(text[line_start:cut_at]):
-                    cut_at = line_start
-                candidate = text[:cut_at].rstrip()
-                if len(candidate) < 40:
-                    return text, False
-                return candidate, True
-            seen.add(normalized)
+            prev_end = last_end.get(normalized)
+            if prev_end is not None:
+                gap = text[prev_end:match.start()]
+                if not cls._TOP_LEVEL_ITEM_MARKER_RE.search(gap):
+                    cut_at = match.start()
+                    line_start = text.rfind("\n", 0, cut_at) + 1
+                    if cls._BULLET_PREFIX_RE.match(text[line_start:cut_at]):
+                        cut_at = line_start
+                    candidate = text[:cut_at].rstrip()
+                    if len(candidate) < 40:
+                        return text, False
+                    return candidate, True
+            last_end[normalized] = match.end()
 
         return text, False
 
@@ -7650,6 +8305,61 @@ class Orchestrator:
             "de esta misma respuesta, decilo explicitamente al principio "
             "de esa seccion (ej. 'requiere haber aplicado antes la idea "
             "1').]"
+        )
+
+    # BLINDAJE (2026-09-19, patch_orchestrator108 -- pedido explícito del
+    # usuario, seguimiento directo de patch_orchestrator105/106/107: "y si
+    # directamente siempre recomiende usar el workspace para editar,
+    # corregir o mejorar el codigo? porque... si le empiezo a decir eso a
+    # gemini tampoco podra renderizar tanto codigo, mejor implementa una
+    # via en donde siempre que se quiera mejorar, reparar, o modificar se
+    # sugiera guardarlo y encender el workspace". Motivado por un turno
+    # real, MEDIDO en vivo, que aterrizó exactamente en el límite que el
+    # usuario anticipó: "i want to implement the 3rd point, how i do it?"
+    # (sin workspace, solo `run_cmd` habilitado) hizo que el modelo
+    # intentara `run_cmd` dos veces sin avanzar y abortara con "Could you
+    # clarify or rephrase" -- el modo sugerencia (explicar+ubicar) ya
+    # evita la reescritura completa, pero sigue siendo texto de chat que
+    # el usuario tiene que copiar/pegar a mano turno tras turno, y un
+    # seguimiento AMBIGUO sobre ese texto (sin repetir el código) puede
+    # hacer que el modelo improvise con la única herramienta que tiene
+    # (`run_cmd`) en vez de simplemente re-explicar. En vez de intentar
+    # cerrar cada variante posible de ese agujero con más regex, se
+    # agrega una recomendación DETERMINÍSTICA (no depende de que el
+    # modelo decida mencionarla -- el aviso genérico y débil que ya
+    # existía en `_workspace_tools_block_en/es`, "mention once that the
+    # user can enable workspace tools", demostró en este mismo log que
+    # NO se puede confiar en que el modelo lo diga cuando más hace
+    # falta) al final de CUALQUIER respuesta que entró en modo sugerencia
+    # (`_suggestion_mode_active`, ver `run_turn`) mientras el workspace
+    # sigue apagado -- exactamente el conjunto de turnos "querés
+    # mejorar/reparar/modificar código ya mostrado, sin archivo real
+    # donde aplicarlo" que el usuario describió. Se agrega como texto
+    # PLANO al final de `final_response` (no como `[SYSTEM NOTE: ...]`
+    # -- ese formato es para instruir al MODELO en el prompt de entrada,
+    # esto es para que lo LEA el usuario) en vez de depender de que el
+    # modelo lo redacte él mismo, así aparece siempre, sin importar qué
+    # tan cooperativo esté el modelo ese turno.
+    @staticmethod
+    def _build_workspace_upsell_tip(lang: str) -> str:
+        if lang == "English":
+            return (
+                "\n\n---\n💡 *For more changes like this, turning on the "
+                "workspace is more reliable than continuing in chat: enable "
+                "file tools (📁 Workspace section in the sidebar), point it "
+                "at the folder where you want this code to live, and ask me "
+                "to save it there. After that I can make exact, targeted "
+                "edits directly on the file instead of re-explaining or "
+                "rewriting it from scratch every time.*"
+            )
+        return (
+            "\n\n---\n💡 *Para seguir editando esto, activar el workspace "
+            "es más confiable que seguir en el chat: activá las "
+            "herramientas de archivo (sección '📁 Workspace' de la barra "
+            "lateral), apuntala a la carpeta donde querés que viva este "
+            "código, y pedime que lo guarde ahí. Después puedo hacer "
+            "ediciones exactas y puntuales directo sobre el archivo, en "
+            "vez de reexplicar o reescribir todo desde cero cada vez.*"
         )
 
     @classmethod
@@ -8750,7 +9460,7 @@ class Orchestrator:
             }
 
         run_cmd_aliases = {
-            "execute_command", "run_command", "shell", "terminal", 
+            "execute_command", "run_command", "shell", "terminal",
             "cmd", "run_cmd", "bash", "exec", "system_cmd"
         }
         if tool_name in run_cmd_aliases:
@@ -8758,6 +9468,36 @@ class Orchestrator:
             return {
                 "tool": "run_cmd",
                 "parameters": {"command": str(cmd_val).strip()}
+            }
+
+        # BLINDAJE (2026-09-19, patch_orchestrator104 -- ver el BLINDAJE
+        # largo junto a `web_search` en `CLOUD_TOOLS_SCHEMA`): mismo
+        # criterio que los 4 bloques de alias de arriba -- el modelo
+        # puede adivinar cualquiera de estos nombres razonables para "la
+        # herramienta de búsqueda web" en vez del canónico "web_search"
+        # enseñado en el schema. Sin esto, un sinónimo caía en
+        # `self.tools.execute(...)` (que no lo reconoce), disparando el
+        # guardia `_WEB_SEARCH_TOOL_ALIASES` de `execute_tool_from_call`
+        # con un mensaje pensado para la ÉPOCA en la que la búsqueda web
+        # NO era una herramienta real ("ya fue inyectada en el prompt") --
+        # ahora sí lo es, así que normalizar el nombre acá evita esa
+        # respuesta obsoleta y deja que el llamado real se ejecute.
+        web_search_aliases = {
+            "web_search", "search_web", "websearch", "internet_search",
+            "search_internet", "browse", "browse_web", "google_search",
+            "search", "buscar_en_internet", "busqueda_web", "buscar_web",
+            "buscar",
+        }
+        if tool_name in web_search_aliases:
+            query_val = (
+                params_dict.get("query") or params_dict.get("q")
+                or params_dict.get("consulta") or params_dict.get("search")
+                or params_dict.get("busqueda") or params_dict.get("term")
+                or ""
+            )
+            return {
+                "tool": "web_search",
+                "parameters": {"query": str(query_val).strip()}
             }
 
         return {
@@ -8835,7 +9575,22 @@ class Orchestrator:
             "personalizada) — sin visibilidad del comando real"
         )
 
-    def execute_tool_from_call(self, tool_call: dict) -> str:
+    def execute_tool_from_call(
+        self, tool_call: dict,
+        lang: Optional[str] = None,
+        log_cb: Optional[Callable] = None,
+    ) -> str:
+        """
+        BLINDAJE (2026-09-19, patch_orchestrator104): `lang`/`log_cb` se
+        suman a la firma -- opcionales, con default `None`, para no
+        romper ningún llamador existente -- únicamente para que la nueva
+        herramienta `web_search` (ver más abajo) pueda usar el idioma
+        correcto en sus mensajes de progreso ("[WEB_SEARCH] Consultando
+        motor de búsqueda...") y emitirlos por `log_cb` igual que ya hace
+        el pipeline de búsqueda pre-emptiva (`_build_contextual_search_
+        query`/`search_web_context`, ver el llamado de más abajo). Ningún
+        otro tool_name usa estos dos parámetros nuevos.
+        """
         tool_name = tool_call.get("tool")
         params = tool_call.get("parameters", {})
 
@@ -8919,7 +9674,26 @@ class Orchestrator:
                 tool_name, risk_tier.value, risk_reason,
             )
 
-        result = self.tools.execute(tool_name, **params)
+        # BLINDAJE (2026-09-19, patch_orchestrator104 -- ver el BLINDAJE
+        # largo junto a `web_search` en `CLOUD_TOOLS_SCHEMA` y junto a
+        # `_should_force_web_search`): `web_search` NO vive en
+        # `self.tools` (`LocalToolDispatcher`, tools.py) -- a diferencia
+        # de las herramientas de archivos/sistema, no hace falta ningún
+        # sandbox de disco ni de comandos, así que se ejecuta directo
+        # acá, reusando el mismo `search_web_context` que ya usaba el
+        # pipeline de búsqueda pre-emptiva (import de módulo, arriba del
+        # archivo). El resultado es un STRING (nunca un dict), así que el
+        # guardia de "alucinación de web_search" de más abajo
+        # (`_WEB_SEARCH_TOOL_ALIASES`, que solo dispara sobre
+        # `isinstance(result, dict) and result.get("status")=="error"`)
+        # nunca se activa para un llamado real -- sigue de pie, sin
+        # tocarse, como red de seguridad para el caso (ahora más raro)
+        # de que el modelo invente un nombre de herramienta que ni
+        # siquiera pasó por acá.
+        if tool_name == "web_search":
+            result = self._execute_web_search_tool_call(params, lang=lang, log_cb=log_cb)
+        else:
+            result = self.tools.execute(tool_name, **params)
 
         if tool_name == "run_cmd":
             # BLINDAJE (2026-09-17, mismo gap de observabilidad de
@@ -9017,6 +9791,69 @@ class Orchestrator:
         # con espacios o símbolos.
         _tag_name = re.sub(r"[^A-Za-z0-9_+\-]", "_", str(tool_name)) or "unknown"
         return f"```toolresult-{_tag_name}\n{safe_result}\n```\n"
+
+    def _execute_web_search_tool_call(
+        self, params: Dict[str, Any],
+        lang: Optional[str] = None,
+        log_cb: Optional[Callable] = None,
+    ) -> str:
+        """
+        BLINDAJE (2026-09-19, patch_orchestrator104 -- ver el BLINDAJE
+        largo junto a `web_search` en `CLOUD_TOOLS_SCHEMA`): cuerpo real
+        de la nueva herramienta agéntica `web_search`, invocada desde
+        `execute_tool_from_call`. A propósito NO reusa
+        `_build_contextual_search_query` (el rewriter de 3 capas que
+        resuelve pronombres/deixis usando el historial de conversación,
+        pensado para compensar la falta de criterio del router
+        determinista) -- acá el LLAMADOR YA ES el modelo, con la
+        conversación completa en la cabeza; pedirle en el schema una
+        "consulta concreta y autocontenida" (ver `input_schema` de
+        `web_search`) y confiar en esa consulta tal cual es más directo
+        y no le suma una segunda reescritura encima de la que el modelo
+        ya hizo. Devuelve siempre un STRING -- nunca un dict ni una
+        excepción -- para que el guardia de "alucinación de web_search"
+        de `execute_tool_from_call` (`_WEB_SEARCH_TOOL_ALIASES`) nunca se
+        confunda con un llamado real.
+        """
+        is_en = (lang or "Spanish") == "English"
+        query = str(
+            params.get("query") or params.get("q") or params.get("consulta")
+            or params.get("search") or params.get("busqueda") or ""
+        ).strip()
+        if not query:
+            return (
+                "Error: the 'query' parameter is missing or empty -- call "
+                "web_search again with a specific, self-contained search query."
+                if is_en else
+                "Error: falta el parámetro 'query' o está vacío -- volvé a "
+                "llamar a web_search con una consulta de búsqueda concreta y "
+                "autocontenida."
+            )
+        try:
+            max_results = int(params.get("max_results") or 4)
+        except (TypeError, ValueError):
+            max_results = 4
+        max_results = max(1, min(max_results, 6))
+        try:
+            formatted = search_web_context(
+                query, max_results=max_results, lang=lang, log_cb=log_cb,
+            )
+        except Exception as exc:
+            logger.warning("🛡️ [WebSearchTool] search_web_context falló: %s", exc)
+            formatted = ""
+        if not formatted:
+            return (
+                f"No usable results were found for the query {query!r}. Do NOT "
+                "retry the exact same query -- either rephrase it more "
+                "specifically, or answer using what you already know, clearly "
+                "noting that you could not confirm it with a live search."
+                if is_en else
+                f"No se encontraron resultados utilizables para la consulta "
+                f"{query!r}. NO reintentes la MISMA consulta -- reformulala de "
+                "forma más específica, o respondé con lo que ya sabés, "
+                "aclarando que no pudiste confirmarlo con una búsqueda en vivo."
+            )
+        return formatted
 
     _TOOLGUARD_NOTICE_PREFIXES: Tuple[str, str] = (
         "[AVISO DEL SISTEMA]", "[INSTRUCCIÓN DEL SISTEMA]",
@@ -9553,6 +10390,43 @@ class Orchestrator:
         # ambos bloques (write_file/read_file/list_dir) se reemplazan
         # acá por un aviso corto de que están apagadas y que la
         # respuesta va siempre en el chat.
+        # BLINDAJE (2026-09-19, patch_orchestrator104 -- ver el BLINDAJE
+        # largo junto a `web_search` en `CLOUD_TOOLS_SCHEMA`): a
+        # diferencia de las 4 herramientas de workspace, `web_search` NO
+        # depende de ningún interruptor manual (`_tool_currently_enabled`
+        # la deja siempre disponible) -- así que este bloque va SIEMPRE,
+        # sin el `if self._workspace_tools_are_enabled(): ... else: ...`
+        # de arriba/abajo. Instrucción corta + un ejemplo, mismo formato
+        # que ya usan `write_file`/`read_file` acá arriba: cuándo SÍ
+        # (actualidad/precios/resultados/noticias) y cuándo NO (edición
+        # de código -- "agregale cosas al juego" sigue siendo SIEMPRE un
+        # pedido de archivo, nunca de búsqueda, sin importar que
+        # contenga "juego"/"game").
+        _web_search_tool_block_en = (
+            '```json\n{"tool": "web_search", "parameters": {"query": "current Bitcoin price USD"}}\n```\n'
+            "Use `web_search` ONLY for current/real-time information you're not "
+            "sure of and that may have changed (prices, sports scores, news, the "
+            "latest version of something). NEVER use it for code/file requests — "
+            "\"add cool stuff to the game\"/\"fix the code\" is ALWAYS a file-tool "
+            "request (`read_file`/`edit_file`/`write_file`), never a search, even "
+            "though it contains a word like \"game\". Formulate a specific, "
+            "self-contained query — resolve any pronoun (\"that\", \"the latest "
+            "one\") yourself using the conversation so far before calling it.\n"
+        )
+        _web_search_tool_block_es = (
+            '```json\n{"tool": "web_search", "parameters": {"query": "precio actual del dolar blue"}}\n```\n'
+            "Usá `web_search` SOLO para información actual/en tiempo real de la "
+            "que no estés seguro y que pueda haber cambiado (precios, resultados "
+            "deportivos, noticias, la versión más reciente de algo). NUNCA la "
+            "uses para pedidos de código/archivos — \"agregale cosas geniales al "
+            "juego\"/\"arreglá el código\" es SIEMPRE un pedido de herramienta de "
+            "archivo (`read_file`/`edit_file`/`write_file`), nunca de búsqueda, "
+            "aunque contenga una palabra como \"juego\"/\"game\". Formulá una "
+            "consulta concreta y autocontenida -- resolvé vos mismo cualquier "
+            "pronombre (\"eso\", \"la última\") usando la conversación previa "
+            "antes de llamarla.\n"
+        )
+
         if self._workspace_tools_are_enabled():
             _workspace_tools_block_en = (
                 '```json\n{"tool": "write_file", "parameters": {"path": "system_health.py", "content": "import psutil\\n..."}}\n```\n'
@@ -9631,6 +10505,7 @@ class Orchestrator:
                 "object MUST have a top-level \"tool\" key and a \"parameters\" object — "
                 "never emit a bare parameter object like {\"path\": ...} on its own:\n"
                 '```json\n{"tool": "system_telemetry", "parameters": {}}\n```\n'
+                + _web_search_tool_block_en
                 + _workspace_tools_block_en +
                 "Otherwise just answer in natural language. Available tools:\n"
                 f"{tools_schema_json}\n\n"
@@ -9672,6 +10547,7 @@ class Orchestrator:
                 "nivel superior y un objeto \"parameters\" — nunca emitas el objeto de "
                 "parámetros pelado tipo {\"path\": ...} por sí solo:\n"
                 '```json\n{"tool": "system_telemetry", "parameters": {}}\n```\n'
+                + _web_search_tool_block_es
                 + _workspace_tools_block_es +
                 "En cualquier otro caso, respondé en lenguaje natural. Herramientas "
                 "disponibles:\n"
@@ -10426,6 +11302,9 @@ class Orchestrator:
         ).strip()
 
         self.cloud_backend_enabled: bool = False
+        # patch_orchestrator96 (2026-09-19): proveedor de Nube activo --
+        # ver el BLINDAJE junto a `GEMINI_API_BASE` más arriba.
+        self.cloud_provider: str = self.CLOUD_PROVIDER_ANTHROPIC
         self.cloud_api_key: Optional[str] = None
         self.cloud_model_id: str = self.CLOUD_DEFAULT_MODEL
         self.cloud_output_budget_cents: int = 1
@@ -10852,7 +11731,7 @@ class Orchestrator:
         # contexto de código (nunca aparecen solos: siempre exigen un
         # verbo de escritura cerca, ver `_FILE_WRITE_VERB_INNER`).
         r"doom|agario|agar\.?io|mario|minecraft|buscaminas|minesweeper|"
-        r"ajedrez|chess|asteroids?|invaders?|"
+        r"ajedrez|chess|asteroids?|asteroides|invaders?|invasores|"
         r"workspace|carpeta\w*|directorio\w*|folder\w*|repo\w*|proyecto\w*|project\w*"
     )
     # BLINDAJE (2026-09-18, patch_orchestrator78 -- bug real, MEDIDO vía
@@ -10952,7 +11831,7 @@ class Orchestrator:
         # en un lugar no encontrado por la búsqueda, queda sincronizada.
         r"snake|tetris|pong|pac-?man|flappy\w*|breakout|arkanoid|2048|"
         r"doom|agario|agar\.?io|mario|minecraft|buscaminas|minesweeper|"
-        r"ajedrez|chess|asteroids?|invaders?)\b",
+        r"ajedrez|chess|asteroids?|asteroides|invaders?|invasores)\b",
         re.IGNORECASE,
     )
     _FILE_MODIFY_VERB_RE: Pattern[str] = re.compile(
@@ -10968,6 +11847,22 @@ class Orchestrator:
         # archivo (_current_file_context) y terminaba inventando uno
         # nuevo de cero en vez de editar el real.
         r"mejor[aáo]\w*|optimiz\w*|improv\w*|enhanc\w*|fix\w*|"
+        # BLINDAJE (2026-09-19, patch_orchestrator108 -- bug real, MEDIDO
+        # en vivo: "i want to implement the 3rd point, how i do it?" (un
+        # seguimiento legítimo sobre una mejora ya sugerida en la
+        # respuesta anterior) no matcheaba NINGÚN verbo de esta lista --
+        # "implement" no estaba -- así que ni `mod_is_modify` ni el
+        # bloque de reinyección de `_last_generated_code_text` (ver
+        # patch_orchestrator105/106) se activaban para este turno. El
+        # modelo, sin el código anterior en contexto y sin instrucción de
+        # "explicá, no reescribas", terminó llamando a `run_cmd` dos
+        # veces sin avanzar y abortando. `implement\w*` alcanza para
+        # cubrir tanto el inglés (implement/implementing/implementation)
+        # como el español (implementa/implementar/implementación), ya
+        # que comparten el mismo prefijo -- no hace falta una raíz
+        # separada para cada idioma, mismo criterio que el resto de esta
+        # lista.
+        r"implement\w*|"
         # BLINDAJE (patch_orchestrator92, 2026-09-18 -- auditoría a
         # pedido del usuario tras patch89/90/91). Dos categorías
         # nuevas, con riesgo de falso positivo evaluado por separado:
@@ -11098,6 +11993,28 @@ class Orchestrator:
         re.IGNORECASE,
     )
 
+    # BLINDAJE (2026-09-19, patch_orchestrator100 -- ver el docstring
+    # junto a `_zero_chatter`, dentro de `run_turn`): a diferencia de
+    # `_NON_FILE_TOPIC_RE` (arriba), este regex SÍ puede usar el verbo
+    # suelto "explica"/"explain" sin riesgo -- ese, con `_NON_FILE_TOPIC_
+    # RE`, controlaba si un turno con verbo de "modificar" era en
+    # realidad sobre un archivo o no (ahí el verbo suelto causó un falso
+    # positivo real, patch_orchestrator89, ver el BLINDAJE de arriba).
+    # Acá el uso es distinto: solo decide si la INSTRUCCIÓN DE CIERRE
+    # del modelo debe pedir brevedad o no, nunca si un turno es "sobre
+    # archivos" -- no hay equivalente al riesgo de patch89 en este uso,
+    # así que capturar el verbo suelto es intencional y deseado (es
+    # justo el caso que hay que cubrir: "...y explica que añadiste").
+    _EXPLICIT_EXPLANATION_REQUEST_RE: Pattern[str] = re.compile(
+        r"\bexplica\w*\b|\bdetall\w*\b|\bdescrib\w*\b|"
+        r"\bcu[eé]ntame\b|\bdime\s+qu[eé]\b|"
+        r"\bqu[eé]\s+(?:hiciste|añadiste|agregaste|cambiaste|modificaste|"
+        r"arreglaste|corregiste)\b|"
+        r"\bexplain\w*\b|\bdetail\w*\b|"
+        r"\btell\s+me\s+what\b|\bwhat\s+you\s+(?:did|added|changed|fixed)\b",
+        re.IGNORECASE,
+    )
+
     def _should_suppress_write_file_tool(
         self,
         user_input: str,
@@ -11200,6 +12117,14 @@ class Orchestrator:
         r"inspeccion\w*|examin\w*|resum\w*|resumir|list\w*|listar|"
         r"dame|dam[eé]\w*|dime|dec[ií]m\w*|pas[aá]m\w*|pas[aá]me|"
         r"quiero\s+ver|"
+        # BLINDAJE (2026-09-19, patch_orchestrator111 -- pedido explícito
+        # del usuario, ver el docstring junto al `elif not is_file_write:`
+        # de `run_turn`): "explain"/"explica" faltaba de esta lista --
+        # "explain the mario code of the workspace" (un pedido de
+        # ANÁLISIS/lectura, sin ninguna intención de escritura) no
+        # matcheaba ningún verbo de lectura, así que `_is_file_read_turn`
+        # daba `False` para un turno que claramente lo era.
+        r"explic\w*|explain\w*|"
         r"read\w*|analyz\w*|analys\w*|review\w*|show\w*|display\w*|open\w*|"
         r"inspect\w*|examin\w*|summar\w*|list\w*|print\w*|\bcat\b|view\w*|"
         r"look\s+at|tell\s+me|give\s+me"
@@ -12059,6 +12984,13 @@ class Orchestrator:
                 '```json\n{"tool": "edit_file", "parameters": {"path": "flappy_bird.py", "edits": [{"old_str": "GRAVITY = 0.5", "new_str": "GRAVITY = 0.8"}, {"old_str": "def jump():", "new_str": "def jump():\\n    play_sound()"}]}}\n```\n'
                 '```json\n{"tool": "read_file", "parameters": {"path": "flappy_bird.py"}}\n```\n'
                 '```json\n{"tool": "list_dir", "parameters": {"path": "."}}\n```\n'
+                "WEB_SEARCH — RARELY NEEDED HERE: `web_search` also exists, for "
+                "current/real-time facts you're unsure of (prices, scores, news). A "
+                "vague request like \"add cool stuff to the game\"/\"improve the "
+                "code\" is a file-edit request, period — NEVER call `web_search` for "
+                "it just because it contains a word like \"game\"/\"code\"; use "
+                "`read_file`/`edit_file` instead, exactly as above.\n"
+                '```json\n{"tool": "web_search", "parameters": {"query": "current Bitcoin price USD"}}\n```\n'
                 "PATHS: the user's workspace folder is the relative root. Use "
                 "\"flappy_bird.py\" or \"src/game.py\" — NEVER an absolute path and "
                 "NEVER a \"workspace/\" prefix. When you write a file with `write_file`, "
@@ -12139,6 +13071,14 @@ class Orchestrator:
                 '```json\n{"tool": "edit_file", "parameters": {"path": "flappy_bird.py", "edits": [{"old_str": "GRAVITY = 0.5", "new_str": "GRAVITY = 0.8"}, {"old_str": "def jump():", "new_str": "def jump():\\n    play_sound()"}]}}\n```\n'
                 '```json\n{"tool": "read_file", "parameters": {"path": "flappy_bird.py"}}\n```\n'
                 '```json\n{"tool": "list_dir", "parameters": {"path": "."}}\n```\n'
+                "WEB_SEARCH — RARA VEZ HACE FALTA ACÁ: también existe `web_search`, "
+                "para datos actuales/en tiempo real de los que no estés seguro "
+                "(precios, resultados, noticias). Un pedido vago como \"agregale "
+                "cosas geniales al juego\"/\"mejorá el código\" es un pedido de "
+                "edición de archivo, punto — NUNCA llames a `web_search` para eso "
+                "solo porque contiene una palabra como \"juego\"/\"código\"; usá "
+                "`read_file`/`edit_file` como arriba.\n"
+                '```json\n{"tool": "web_search", "parameters": {"query": "precio actual del dolar blue"}}\n```\n'
                 "RUTAS: la carpeta del workspace del usuario es la raíz relativa. Usá "
                 "\"flappy_bird.py\" o \"src/juego.py\" — NUNCA una ruta absoluta y "
                 "NUNCA un prefijo \"workspace/\". Cuando escribís un archivo con "
@@ -12635,10 +13575,60 @@ class Orchestrator:
 
     @classmethod
     def _build_codegen_salvage_prompt(
-        cls, user_input: str, filename: Optional[str], lang: Optional[str]
+        cls, user_input: str, filename: Optional[str], lang: Optional[str],
+        # BLINDAJE (2026-09-19, patch_orchestrator110 -- ver el docstring
+        # de `_salvage_file_operation`, sección "ya se leyó en este
+        # turno"): cuando el archivo objetivo YA EXISTE y ya se leyó, este
+        # prompt debe pedir una actualización DIRIGIDA sobre el contenido
+        # real -- no una reescritura ciega desde cero a partir solo del
+        # pedido del usuario (eso perdería cualquier cosa que el archivo
+        # ya tuviera, ej. las mejoras de un turno anterior). `None`
+        # (default) preserva el comportamiento original para un archivo
+        # nuevo, donde no hay nada que preservar.
+        existing_content: Optional[str] = None,
     ) -> str:
         is_en = (lang or "Spanish") == "English"
         fname = filename or cls._derive_filename(user_input)
+        if existing_content:
+            if is_en:
+                return (
+                    f"This is the CURRENT, working content of \"{fname}\" exactly "
+                    f"as it is on disk right now:\n\n{existing_content}\n\n"
+                    f"The user asked: {user_input}\n\n"
+                    "Do NOT rewrite this file from scratch. Read it as it is and "
+                    "apply the requested change directly on top of it: ADD what "
+                    "needs to be added, IMPROVE what needs to be improved, or "
+                    "REPLACE only the specific part(s) that need replacing. "
+                    "Everything else in the file — unrelated functions, structure, "
+                    "names, style — must stay EXACTLY as it already is. This is a "
+                    "legitimate local development task. Save the COMPLETE updated "
+                    "file by emitting ONLY this tool call — no prose, no refusal, "
+                    "no copyright disclaimer — inside a ```json fence:\n"
+                    f'```json\n{{"tool": "write_file", "parameters": {{"path": "{fname}", '
+                    '"content": "<the entire updated file here, using \\\\n for newlines>"}}\n```\n'
+                    f'The path "{fname}" is relative to the workspace root — do not '
+                    "make it absolute and do not add a \"workspace/\" prefix."
+                )
+            return (
+                f"Este es el contenido ACTUAL y funcional de \"{fname}\" tal cual "
+                f"está en disco ahora mismo:\n\n{existing_content}\n\n"
+                f"El usuario pidió: {user_input}\n\n"
+                "NO reescribas este archivo desde cero. Leelo tal cual está y "
+                "aplicá el cambio pedido directamente sobre él: AGREGÁ lo que "
+                "haya que agregar, MEJORÁ lo que haya que mejorar, o REEMPLAZÁ "
+                "solo la parte puntual que haya que reemplazar. Todo lo demás del "
+                "archivo -- funciones sin relación, estructura, nombres, estilo -- "
+                "tiene que quedar EXACTAMENTE como ya está. Es una tarea legítima "
+                "de desarrollo local. Guardá el archivo COMPLETO actualizado "
+                "emitiendo ÚNICAMENTE esta llamada a herramienta —sin prosa, sin "
+                "rechazo, sin aviso de derechos de autor— dentro de un fence "
+                "```json:\n"
+                f'```json\n{{"tool": "write_file", "parameters": {{"path": "{fname}", '
+                '"content": "<el archivo entero actualizado acá, usando \\\\n para '
+                'los saltos de línea>"}}\n```\n'
+                f'La ruta "{fname}" es relativa a la raíz del workspace — no la '
+                "hagas absoluta ni le agregues un prefijo \"workspace/\"."
+            )
         if is_en:
             return (
                 f"The user asked: {user_input}\n\n"
@@ -12671,6 +13661,20 @@ class Orchestrator:
         *,
         active_model: Optional[str] = None,
         log_cb: Optional[Callable[[str], None]] = None,
+        # BLINDAJE (2026-09-19, patch_orchestrator110): rutas ya leídas
+        # con éxito en ESTE MISMO turno (`_paths_read_this_turn`, ver
+        # `run_turn`). Antes, la rama "modificación sobre archivo
+        # existente" de abajo sintetizaba `read_file` CIEGAMENTE cada vez
+        # que el modelo no producía código real, sin importar si ya se
+        # había leído ese archivo en una pasada anterior -- bug real,
+        # MEDIDO: turno "improve the graphics of the game" sobre
+        # `mario.py` (ya leído en la pasada 1) generó `read_file`
+        # sintetizado DOS VECES MÁS, disparando el guardia anti-bucle y
+        # terminando el turno sin haber intentado escribir el cambio ni
+        # una vez. Con esto, si el archivo objetivo ya está en este set,
+        # se salta el "leer primero" y se escala directo a generar el
+        # cambio real (con el contenido ya conocido como contexto).
+        already_read_paths: Optional[Set[str]] = None,
     ) -> Tuple[Optional[dict], Optional[str]]:
         """
         El modelo NO emitió ninguna llamada para un turno de archivos.
@@ -12683,6 +13687,9 @@ class Orchestrator:
           `write_file` con ese código. Si lo rechazó o no produjo código,
           se regenera el contenido con el modelo general/sin-censura (el
           coder es justo el que rechaza) y se arma la llamada con eso.
+          Si el archivo objetivo YA EXISTE, esa regeneración pide una
+          actualización DIRIGIDA sobre el contenido real (ver
+          `_build_codegen_salvage_prompt`), no una reescritura ciega.
         """
         is_write = self._is_file_write_turn(user_input, decision)
         is_read = self._is_file_read_turn(user_input, decision)
@@ -12736,12 +13743,32 @@ class Orchestrator:
         target_exists = self._sandbox_file_exists(filename)
         stub = self._looks_like_partial_stub(code_payload or "")
 
+        _target_already_read = bool(
+            already_read_paths and filename and filename in already_read_paths
+        )
         if is_modify and target_exists and (not code_payload or stub or refused):
+            if not _target_already_read:
+                _log(
+                    f"Blindaje de archivos: 'modificar {filename}' — leyendo el "
+                    "archivo actual primero (evita reemplazarlo por un stub)."
+                )
+                return {"tool": "read_file", "parameters": {"path": filename}}, None
+            # BLINDAJE (2026-09-19, patch_orchestrator110 -- ver el
+            # comentario de `already_read_paths` en la firma): este mismo
+            # archivo ya se leyó en una pasada anterior de este turno --
+            # releerlo de nuevo no le da al modelo ningún dato que no
+            # tuviera ya, y es justo lo que producía el bucle real medido
+            # ("read_file" repetido hasta el guardia anti-bucle). En vez
+            # de repetir la lectura, se sigue de largo hacia la
+            # regeneración de abajo, que ahora recibe el contenido real
+            # del archivo (ver `existing_content` en la llamada a
+            # `_build_codegen_salvage_prompt`) para aplicar el cambio
+            # dirigido en vez de reescribir a ciegas.
             _log(
-                f"Blindaje de archivos: 'modificar {filename}' — leyendo el "
-                "archivo actual primero (evita reemplazarlo por un stub)."
+                f"Blindaje de archivos: 'modificar {filename}' ya se leyó en "
+                "este turno — generando el cambio directamente sobre el "
+                "contenido real en vez de releerlo de nuevo."
             )
-            return {"tool": "read_file", "parameters": {"path": filename}}, None
 
         if (not code_payload) or refused or stub:
             if refused:
@@ -12768,7 +13795,13 @@ class Orchestrator:
                 )
                 with contextlib.suppress(Exception):
                     regen = self._call_llm(
-                        self._build_codegen_salvage_prompt(user_input, filename, lang),
+                        self._build_codegen_salvage_prompt(
+                            user_input, filename, lang,
+                            existing_content=(
+                                self._read_workspace_file(filename)
+                                if target_exists and filename else None
+                            ),
+                        ),
                         target_model=regen_model,
                         lang_override=lang,
                         system_override=self._get_file_ops_system_prompt(
@@ -12790,7 +13823,14 @@ class Orchestrator:
                         break
 
         if not code_payload or self._looks_like_partial_stub(code_payload):
-            if is_modify and target_exists and filename:
+            # BLINDAJE (2026-09-19, patch_orchestrator110): mismo criterio
+            # que la rama de arriba -- si el archivo YA se leyó en este
+            # turno, releerlo de nuevo acá sería el mismo bucle real
+            # medido (la regeneración de arriba ya tuvo su oportunidad
+            # con el contenido real como contexto y de todos modos no
+            # produjo código usable). Best-effort: se rinde limpio
+            # (`None, None`) en vez de insistir con otro `read_file`.
+            if is_modify and target_exists and filename and not _target_already_read:
                 return {"tool": "read_file", "parameters": {"path": filename}}, None
             return None, None
 
@@ -13478,21 +14518,73 @@ class Orchestrator:
         enabled: bool,
         api_key: Optional[str] = None,
         model_id: Optional[str] = None,
+        provider: Optional[str] = None,
     ) -> None:
         """
-        Prende/apaga el motor de Nube (API real de Claude) y/o actualiza
-        la API key / el modelo objetivo. Llamado desde el panel de
-        configuración de sovnode_qt.py (sección "Motor de Generación").
+        Prende/apaga el motor de Nube (API real de Claude o Gemini, según
+        `provider`) y/o actualiza la API key / el modelo objetivo /
+        el proveedor. Llamado desde el panel de configuración de
+        sovnode_qt.py (sección "Motor de Generación").
 
-        `api_key`/`model_id` en `None` dejan el valor actual sin tocar —
-        así la UI puede togglear `enabled` sin tener que reenviar la key
-        cada vez (p. ej. para apagar temporalmente sin borrarla).
+        `api_key`/`model_id`/`provider` en `None` dejan el valor actual
+        sin tocar — así la UI puede togglear `enabled` sin tener que
+        reenviar el resto cada vez (p. ej. para apagar temporalmente sin
+        borrar nada).
+
+        `provider` (2026-09-19, patch_orchestrator96 -- ver el BLINDAJE
+        junto a `GEMINI_API_BASE`): "anthropic" o "gemini" (cualquier
+        otro valor cae a "anthropic", el de siempre, en vez de dejar el
+        objeto en un estado no reconocido por el resto del pipeline).
+        IMPORTANTE: si el llamador cambia de proveedor SIN mandar
+        `model_id` en el mismo llamado, `self.cloud_model_id` queda con
+        el modelo del proveedor VIEJO (p. ej. "claude-sonnet-5" al pasar
+        a Gemini) -- sovnode_qt.py es responsable de mandar el `model_id`
+        correcto del proveedor nuevo junto con el cambio (ver
+        `_on_cloud_provider_changed`), pero como red de seguridad
+        adicional cualquier lugar que necesite "el modelo default del
+        proveedor activo" debe usar `_cloud_default_model_for_provider()`
+        en vez de asumir `CLOUD_DEFAULT_MODEL` a secas.
         """
         self.cloud_backend_enabled = bool(enabled)
+        if provider is not None:
+            self.cloud_provider = (
+                self.CLOUD_PROVIDER_GEMINI
+                if provider.strip().lower() == self.CLOUD_PROVIDER_GEMINI
+                else self.CLOUD_PROVIDER_ANTHROPIC
+            )
         if api_key is not None:
             self.cloud_api_key = api_key.strip() or None
         if model_id is not None:
-            self.cloud_model_id = model_id.strip() or self.CLOUD_DEFAULT_MODEL
+            self.cloud_model_id = (
+                model_id.strip() or self._cloud_default_model_for_provider()
+            )
+
+    def _cloud_default_model_for_provider(self) -> str:
+        """
+        Modelo default del proveedor de Nube ACTUALMENTE activo
+        (`self.cloud_provider`) -- ver el BLINDAJE junto a
+        `GEMINI_API_BASE`. Reemplaza los usos sueltos de
+        `self.CLOUD_DEFAULT_MODEL` a secas en cualquier lugar que deba
+        funcionar igual de bien con los dos proveedores.
+        """
+        return (
+            self.GEMINI_DEFAULT_MODEL
+            if getattr(self, "cloud_provider", self.CLOUD_PROVIDER_ANTHROPIC)
+            == self.CLOUD_PROVIDER_GEMINI
+            else self.CLOUD_DEFAULT_MODEL
+        )
+
+    def _cloud_pricing_table(self) -> Dict[str, Tuple[float, float]]:
+        """
+        Tabla de precios del proveedor de Nube ACTUALMENTE activo -- ver
+        el BLINDAJE junto a `GEMINI_API_BASE`.
+        """
+        return (
+            self.GEMINI_PRICING_USD_PER_MTOK
+            if getattr(self, "cloud_provider", self.CLOUD_PROVIDER_ANTHROPIC)
+            == self.CLOUD_PROVIDER_GEMINI
+            else self.CLOUD_PRICING_USD_PER_MTOK
+        )
 
     def set_cloud_output_budget(self, cents: int) -> None:
         """
@@ -13580,9 +14672,14 @@ class Orchestrator:
     # original (`_cloud_output_ceiling_tokens()` ahora es un wrapper de una
     # línea sobre este método con el cents actual del usuario).
     def _cloud_output_ceiling_tokens_for_cents(self, cents: int) -> int:
-        _, price_out = self.CLOUD_PRICING_USD_PER_MTOK.get(
-            getattr(self, "cloud_model_id", self.CLOUD_DEFAULT_MODEL),
-            self.CLOUD_PRICING_USD_PER_MTOK[self.CLOUD_DEFAULT_MODEL],
+        # patch_orchestrator96 (2026-09-19): tabla de precios y modelo
+        # default dependen del proveedor activo (Claude/Gemini) -- ver
+        # `_cloud_pricing_table`/`_cloud_default_model_for_provider`.
+        _default_model = self._cloud_default_model_for_provider()
+        _pricing = self._cloud_pricing_table()
+        _, price_out = _pricing.get(
+            getattr(self, "cloud_model_id", _default_model),
+            _pricing[_default_model],
         )
         if price_out <= 0:
             return MemoryGovernor.codegen_num_predict()
@@ -13787,6 +14884,42 @@ class Orchestrator:
     # Cloud (900<1300) en vez de intentarlo y fallar después de gastar
     # plata real -- exactamente el comportamiento que pidió el usuario
     # ("rebotará automáticamente... sin gastar API").
+    #
+    # BLINDAJE (2026-09-19, patch_orchestrator101 -- segunda recalibración
+    # de este mismo piso, pedida explícitamente por el usuario tras medir
+    # en vivo DOS turnos reales con Gemini en la misma sesión:
+    # "dame un codigo de buscaminas" y "Create an space invaders game in
+    # the workspace", ambos con Presupuesto "Bajo" (techo real ~2400tok
+    # para Gemini, ver `_cloud_output_ceiling_tokens_for_cents`). Los dos
+    # pasaron el piso de 1300 (2400>1300, "factible") pero NINGUNO
+    # completó en la pasada de Cloud: ambos dispararon el File-op guard
+    # ("write_file... hit Sonnet's per-turn budget") y cayeron al rescate
+    # local (Ollama) -- ~50s+ de demora medidos, y en el caso de space
+    # invaders el resultado final fue un archivo de apenas 153 bytes,
+    # básicamente vacío. El piso de 1300 seguía siendo un GATE de
+    # factibilidad razonable (evita gastar plata en algo condenado a
+    # $0 tokens), pero no un número que garantice terminar SIN el
+    # rescate local para un juego real con game loop + movimiento +
+    # colisiones -- esas dos cosas son preguntas distintas (ver
+    # docstring de `_estimate_min_viable_codegen_tokens`), y este valor
+    # solo respondía la primera. Se sube a 3000 -- con Gemini en "Bajo"
+    # (techo 2400, rango 1872-3192) esto fuerza la elevación automática
+    # (`_elevate_codegen_ceiling_if_needed`, ya existente desde
+    # patch82/83, sin cambios) a "Medio" (techo real 4800tok para
+    # Gemini) para CUALQUIER pedido de juego, en vez de dejarlo
+    # intentar con 2400 y fallar después. Nota importante para quien
+    # continúe: con Claude (´price_out´ ~2.7x más caro por token que
+    # Gemini), el mismo piso de 3000 NO alcanza con el rango de "Medio"
+    # de Claude (techo real 1800tok, rango hasta 2394) y termina
+    # elevando hasta "Alto" (3600tok) en vez de "Medio" -- es la
+    # consecuencia matemática esperada de un piso en TOKENS compartido
+    # entre proveedores con precio por token distinto, no un bug: la
+    # cantidad de tokens que necesita un juego real no depende del
+    # proveedor, pero cuántos centavos cuestan esos tokens sí. Sin
+    # medición en vivo de un turno de juego con Claude en "Bajo" todavía
+    # esta sesión -- si en la práctica ese salto a "Alto" resulta
+    # excesivo, recalibrar por separado en vez de bajar este número (que
+    # sí está medido para Gemini).
     _MIN_VIABLE_FLOOR_PATTERNS: List[Tuple[Pattern[str], int]] = [
         (
             re.compile(
@@ -13795,7 +14928,7 @@ class Orchestrator:
                 r"plataformer[ao]s?|platformer)\b",
                 re.IGNORECASE,
             ),
-            1300,
+            3000,
         ),
         (
             re.compile(
@@ -13907,7 +15040,12 @@ class Orchestrator:
         r"binary\s+search)\b",
         re.IGNORECASE,
     )
-    _MIN_VIABLE_FLOOR_UNRECOGNIZED_NAME: int = 1300
+    # patch_orchestrator101 (2026-09-19): sube en lockstep con el piso de
+    # "juego" (ver el BLINDAJE junto a `_MIN_VIABLE_FLOOR_PATTERNS`,
+    # arriba) -- este valor siempre se pensó como "mismo orden de
+    # magnitud que 'juego'" (ver el docstring de `_estimate_min_viable_
+    # codegen_tokens`), así que la recalibración de uno arrastra al otro.
+    _MIN_VIABLE_FLOOR_UNRECOGNIZED_NAME: int = 3000
 
     @classmethod
     def _estimate_min_viable_codegen_tokens(cls, user_input: str) -> int:
@@ -13933,8 +15071,14 @@ class Orchestrator:
             floor = cls._MIN_VIABLE_FLOOR_UNRECOGNIZED_NAME
         return floor
 
+    # patch_orchestrator101 (2026-09-19): clave actualizada de 1300 a
+    # 3000 en lockstep con el piso real de "juego" en
+    # `_MIN_VIABLE_FLOOR_PATTERNS` -- este dict es un lookup por VALOR de
+    # piso, así que si no se actualiza acá el turno sigue funcionando
+    # (el número real ya subió donde importa) pero el WAL etiquetaría la
+    # categoría como "3000" en vez de "juego" en la telemetría.
     _MIN_VIABLE_FLOOR_CATEGORY_LABELS: Dict[int, str] = {
-        1300: "juego", 400: "gui", 380: "complejidad_generica", 300: "servidor",
+        3000: "juego", 400: "gui", 380: "complejidad_generica", 300: "servidor",
     }
 
     @classmethod
@@ -14145,15 +15289,46 @@ class Orchestrator:
     #   3. La sobrecarga de escapar comillas/`\n` dentro del JSON (la misma
     #      que ya cubre el 1.5x de `_dynamic_write_budget_tokens`) se paga
     #      DOS VECES acá (una por `old_str`, otra por `new_str`).
-    # 2.75x sobre el mismo tamaño de archivo (vs. 1.5x de `write_file`) es un
-    # primer valor razonable que cubre la duplicación old_str+new_str (~2x)
-    # más margen para la sobrecarga estructural/de escapado extra -- NO
-    # calibrado todavía contra generaciones reales, mismo criterio que el
-    # resto de las constantes de esta sección (ver `_CODEGEN_SOFT_MARGIN_
-    # FRACTION`). Igual que `_dynamic_write_budget_tokens`, esto solo puede
-    # SUBIR el techo real (nunca bajarlo) sobre lo que ya daba el selector
-    # de presupuesto Bajo/Medio/Alto/Extra.
-    _EDIT_FILE_BUDGET_MULTIPLIER: float = 2.75
+    # 2.75x sobre el mismo tamaño de archivo (vs. 1.5x de `write_file`) fue el
+    # primer valor razonable -- cubre la duplicación old_str+new_str (~2x)
+    # más margen para la sobrecarga estructural/de escapado extra -- pero
+    # asume que `new_str` sale del mismo TAMAÑO que `old_str` (una edición
+    # 1:1, sin crecimiento neto del archivo). No deja margen de CRECIMIENTO
+    # -- a diferencia de `_dynamic_write_budget_tokens` de arriba, cuyo 1.5x
+    # el propio usuario pidió explícitamente que incluyera "lugar para que
+    # el modelo agregue contenido nuevo, no solo repita lo que ya había".
+    #
+    # BLINDAJE (2026-09-18, patch_orchestrator95 -- bug real, MEDIDO: turno
+    # "improve that code and tell me what you implemented" sobre
+    # minesweeper.py, 3340 bytes -> techo dinámico de 2786 tokens (2.75x) ->
+    # la pasada de Sonnet gastó los 2786 tokens exactos, prueba de corte a
+    # mitad de generación -- $0.0426 pagados por un `edit_file` que se tuvo
+    # que descartar entero. El rescate local (Ollama, presupuesto grande sin
+    # costo) reintentó la MISMA pasada pero, al ser un modelo mucho más
+    # chico, no reprodujo la mejora ambiciosa que Sonnet había arrancado --
+    # devolvió un cambio casi nulo (9 bytes) en vez de la mejora real
+    # pedida, silenciosamente reportado como "Done" en el chat. Pedido
+    # explícito del usuario tras el diagnóstico: bajar la frecuencia de
+    # este corte "lo menos posible". Como una pasada que SÍ entra dentro
+    # del techo no gasta más por tener un techo más alto (el modelo para
+    # cuando termina, no cuando se le acaba el margen), subir este
+    # multiplicador no le suma costo a los turnos que ya andaban bien --
+    # solo evita el ciclo completo de "pagar Sonnet truncado + descartarlo +
+    # reintentar en Local con peor resultado" en los que SÍ se quedaban
+    # cortos, que es puro desperdicio de dinero y tiempo.
+    #
+    # Nuevo valor 4.0x, con la misma lógica de `_dynamic_write_budget_
+    # tokens` aplicada a `new_str`: old_str (1.0x, el texto viejo sin
+    # tocar) + new_str con margen de CRECIMIENTO real para pedidos amplios
+    # tipo "mejora este código" (2.0x -- el doble del tamaño actual, no
+    # solo 1.0x como asumía el valor viejo) + sobrecarga estructural/
+    # escapado extra de tener dos campos en vez de uno (1.0x, más margen
+    # que el 0.75x anterior). Sigue sin estar calibrado contra generaciones
+    # reales (mismo criterio que el resto de las constantes de esta
+    # sección) -- es una segunda estimación razonada, no una medición; solo
+    # puede SUBIR el techo real (nunca bajarlo) sobre lo que ya daba el
+    # selector de presupuesto Bajo/Medio/Alto/Extra, igual que antes.
+    _EDIT_FILE_BUDGET_MULTIPLIER: float = 4.0
 
     def _dynamic_edit_budget_tokens(self, existing_content: str) -> int:
         """
@@ -14247,6 +15422,57 @@ class Orchestrator:
             lines = lines[:-1]
         return "\n".join(lines)
 
+    def _codegen_rescue_should_force_local(self) -> bool:
+        """
+        BLINDAJE (2026-09-19, patch_orchestrator109 -- pedido explícito
+        del usuario, reportado con captura + log en vivo: turno "Create
+        an mario game in the workspace" con Cloud activo -- el `write_
+        file` pegó contra el techo de Sonnet a los ~28s (normal), pero
+        el rescate de abajo, que fuerza `force_local=True` a propósito
+        (ver docstring de `_continue_truncated_file_write_locally`),
+        tardó más de 150 SEGUNDOS sin terminar en el hardware real del
+        usuario -- una GPU no soportada por ROCm en Windows, así que
+        Ollama corre en CPU. El usuario tuvo que detener la generación a
+        mano: "se demoro mas de 150 segundos ... deberiamos eliminar eso
+        la verdad, arruina la experiencia al demorarse mucho").
+
+        Esto REVIERTE, a propósito, el pedido explícito ANTERIOR del
+        mismo usuario (2026-09-15, ver el mismo docstring de abajo):
+        "pagar una segunda pasada completa en Cloud ... gasta el doble
+        del presupuesto elegido -- el resto se termina gratis [en
+        Local]". Ambos pedidos son legítimos, pero apuntan a hardware
+        distinto -- en este hardware, terminar "gratis" en Local no es
+        gratis: cuesta minutos de espera con el turno colgado, mucho
+        peor que la fracción de centavo extra que cuesta terminarlo en
+        Cloud (15-30s medidos en la misma sesión). Con el pedido más
+        reciente pesando más que el anterior, la prioridad pasa a ser
+        VELOCIDAD sobre el ahorro marginal de esa segunda pasada.
+
+        Con Cloud activo y configurado (`cloud_backend_enabled` +
+        `cloud_api_key`, flags de sesión del panel "Motor de
+        Generación"), esta función devuelve `False` -- dejando que el
+        propio gate de `_call_llm`/`_call_llm_raw` (`if self.cloud_
+        backend_enabled and self.cloud_api_key and not force_local:`)
+        enrute el rescate por Cloud, en vez de forzar Local a mano. Sin
+        Cloud configurado no hay otra opción real -- se mantiene el
+        comportamiento original y se sigue terminando gratis en Local
+        (`True`).
+
+        Todos los llamadores de este método (los 4 sitios de `force_
+        local=True` dentro de `_continue_truncated_file_write_locally` y
+        `_rescue_truncated_edit_file_locally`) solo se alcanzan, hoy,
+        desde ramas de `run_turn` donde `_cloud_active`/`_cloud_active_
+        inloop` ya es `True` -- así que en la práctica esto simplemente
+        cambia esas 4 llamadas de "siempre Local" a "siempre Cloud". Se
+        implementa como chequeo explícito (no una constante `False`
+        fija) para seguir protegiendo a un usuario sin Cloud configurado
+        si estos métodos alguna vez se invocan desde otro lugar.
+        """
+        return not bool(
+            getattr(self, "cloud_backend_enabled", False)
+            and getattr(self, "cloud_api_key", None)
+        )
+
     def _continue_truncated_file_write_locally(
         self,
         tool_call: Dict[str, Any],
@@ -14290,12 +15516,21 @@ class Orchestrator:
         SIN TOCAR -- el archivo queda con el contenido que ya tenía,
         nunca peor que sin este método.
 
-        `force_local=True` -- la mitad ya pagada en Cloud es, en general,
-        donde más aporta la calidad de Sonnet (estructura, decisiones de
-        diseño); el resto suele ser más mecánico (seguir el patrón ya
-        establecido). Reusa `active_model` -- ya es la etiqueta de ruteo
-        LOCAL que el router eligió para este turno (ver
-        `_reported_model_used`), no hace falta reclasificar.
+        `force_local=self._codegen_rescue_should_force_local()` (BLINDAJE
+        2026-09-19, patch_orchestrator109 -- ver el docstring de ese
+        método): antes esto era `force_local=True` fijo, bajo la premisa
+        de que la mitad ya pagada en Cloud es, en general, donde más
+        aporta la calidad de Sonnet (estructura, decisiones de diseño) y
+        el resto suele ser más mecánico. Pedido real, medido, del
+        usuario: en su hardware (GPU sin soporte ROCm en Windows,
+        Ollama en CPU) esa "mitad mecánica" tardó más de 150 segundos
+        sin terminar -- así que con Cloud activo esto ahora completa por
+        Cloud (rápido, costo marginal) en vez de colgarse en Local
+        ("gratis" pero potencialmente eterno). Reusa `active_model` --
+        ya es la etiqueta de ruteo LOCAL que el router eligió para este
+        turno (ver `_reported_model_used`), no hace falta reclasificar
+        (irrelevante de todos modos si esta llamada termina yendo a
+        Cloud, que ignora `active_model` -- ver `_call_llm_raw`).
         """
         params = tool_call.get("parameters", {}) or {}
         content = str(params.get("content") or "")
@@ -14446,7 +15681,7 @@ class Orchestrator:
                     _targeted_update_prompt, target_model=active_model,
                     lang_override=lang_override, system_override=gen_system,
                     num_predict_override=MemoryGovernor.codegen_num_predict(),
-                    force_local=True, log_cb=log_cb, perf_label="LocalTargetedUpdate",
+                    force_local=self._codegen_rescue_should_force_local(), log_cb=log_cb, perf_label="LocalTargetedUpdate",
                 )
                 if _updated_content and not _updated_content.lstrip().startswith("[ERROR"):
                     _updated_content = self._strip_continuation_fence(_updated_content).strip()
@@ -14704,7 +15939,7 @@ class Orchestrator:
                     _fresh_write_prompt, target_model=active_model,
                     lang_override=lang_override, system_override=gen_system,
                     num_predict_override=_fresh_hard_ceiling,
-                    force_local=True, log_cb=log_cb, perf_label="LocalFreshWrite",
+                    force_local=self._codegen_rescue_should_force_local(), log_cb=log_cb, perf_label="LocalFreshWrite",
                 )
                 if _fresh_content and not _fresh_content.lstrip().startswith("[ERROR"):
                     _fresh_content = self._strip_continuation_fence(_fresh_content).strip()
@@ -14756,7 +15991,7 @@ class Orchestrator:
         continuation = self._call_llm(
             continuation_prompt, target_model=active_model, lang_override=lang_override,
             system_override=gen_system, num_predict_override=MemoryGovernor.codegen_num_predict(),
-            force_local=True, log_cb=log_cb, perf_label="LocalContinuation",
+            force_local=self._codegen_rescue_should_force_local(), log_cb=log_cb, perf_label="LocalContinuation",
         )
         if not continuation or continuation.lstrip().startswith("[ERROR"):
             return tool_call
@@ -14879,14 +16114,23 @@ class Orchestrator:
         intento cortado entero (nunca se aplica -- `edit_file_safely` de
         `tools.py` ya lo hubiera rechazado igual, por `old_str` vacío/no
         encontrado, sin dañar el archivo) y volver a pedir la MISMA llamada
-        completa desde cero en el motor Local (Ollama, costo $0 de API),
-        con el presupuesto grande fijo de Local
+        completa desde cero, con el presupuesto grande fijo
         (`MemoryGovernor.codegen_num_predict()`, 6144 tokens) que ya le
         sobra a cualquier diff que haya desbordado el techo 2.75x de Cloud.
-        Reactivo, best-effort: si el rescate en Local falla (error de
-        conexión, respuesta vacía, o no logra armar un `edit_file` con
-        contenido real), devuelve `tool_call` SIN TOCAR -- el resto del
-        pipeline (el guardia de errores de `[SANDBOX WRITE ERROR]` de
+
+        BLINDAJE (2026-09-19, patch_orchestrator109 -- ver el docstring de
+        `_codegen_rescue_should_force_local`): esto originalmente forzaba
+        el motor Local a secas (costo $0 de API), bajo el mismo criterio
+        de "terminar gratis" que `_continue_truncated_file_write_locally`.
+        Pedido real, medido, del usuario: en su hardware (GPU sin soporte
+        ROCm en Windows, Ollama en CPU) ese rescate "gratis" tardó más de
+        150 segundos sin terminar. Con Cloud activo, ahora se rehace por
+        Cloud (rápido, costo marginal) en vez de forzar Local.
+
+        Reactivo, best-effort: si el rescate falla (error de conexión,
+        respuesta vacía, o no logra armar un `edit_file` con contenido
+        real), devuelve `tool_call` SIN TOCAR -- el resto del pipeline (el
+        guardia de errores de `[SANDBOX WRITE ERROR]` de
         patch_orchestrator57, el bucle de reintentos) sigue funcionando
         exactamente igual que si este rescate no existiera, nunca peor.
         """
@@ -14894,7 +16138,7 @@ class Orchestrator:
             prompt_text, target_model=active_model, lang_override=lang_override,
             system_override=gen_system,
             num_predict_override=MemoryGovernor.codegen_num_predict(),
-            force_local=True, log_cb=log_cb, perf_label="LocalEditFileRescue",
+            force_local=self._codegen_rescue_should_force_local(), log_cb=log_cb, perf_label="LocalEditFileRescue",
         )
         if not _rescue_response or _rescue_response.lstrip().startswith("[ERROR"):
             return tool_call
@@ -15017,8 +16261,12 @@ class Orchestrator:
         que ese número siga reflejando el total real de entrada, no solo
         la porción fresca.
         """
-        price_in, price_out = self.CLOUD_PRICING_USD_PER_MTOK.get(
-            self.cloud_model_id, self.CLOUD_PRICING_USD_PER_MTOK[self.CLOUD_DEFAULT_MODEL]
+        # patch_orchestrator96 (2026-09-19): tabla de precios depende del
+        # proveedor activo (Claude/Gemini) -- ver `_cloud_pricing_table`.
+        _default_model = self._cloud_default_model_for_provider()
+        _pricing = self._cloud_pricing_table()
+        price_in, price_out = _pricing.get(
+            self.cloud_model_id, _pricing[_default_model]
         )
         cost = (
             (input_tokens / 1_000_000.0) * price_in
@@ -15057,18 +16305,50 @@ class Orchestrator:
             # comportamiento ni de costo real): agrega la escritura de
             # cache al mensaje cuando ocurre, para que el PROXIMO test en
             # vivo deje ver de una vez cual de las dos esta pasando.
+            # patch_orchestrator93 (2026-09-18, langfix): esta linea nunca
+            # tuvo rama de idioma -- se armaba siempre en espanol aunque
+            # `self.current_language` fuera "English", a diferencia de
+            # casi todo el resto del archivo que ya usa el patron
+            # `is_en = getattr(self, "current_language", "Spanish") ==
+            # "English"`. Reportado por el usuario viendo la consola en
+            # un turno grabado con la UI en ingles: "3 nuevos en cache" /
+            # "(total sesion: $X)" quedaban en espanol en medio de una
+            # consola por lo demas en ingles.
+            is_en = getattr(self, "current_language", "Spanish") == "English"
             cache_bits = []
             if cache_read_tokens:
-                cache_bits.append(f"{cache_read_tokens} le\u00eddos de cach\u00e9")
-            if cache_creation_tokens:
-                cache_bits.append(f"{cache_creation_tokens} nuevos en cach\u00e9")
-            cache_note = f" ({', '.join(cache_bits)})" if cache_bits else ""
-            with contextlib.suppress(Exception):
-                log_cb(
-                    f"\u2601 Claude API ({self.cloud_model_id}): {total_in_tokens} in{cache_note} / "
-                    f"{output_tokens} out tok \u2014 ${cost:.4f} "
-                    f"(total sesi\u00f3n: ${total_cost:.4f})"
+                cache_bits.append(
+                    f"{cache_read_tokens} read from cache" if is_en
+                    else f"{cache_read_tokens} le\u00eddos de cach\u00e9"
                 )
+            if cache_creation_tokens:
+                cache_bits.append(
+                    f"{cache_creation_tokens} new to cache" if is_en
+                    else f"{cache_creation_tokens} nuevos en cach\u00e9"
+                )
+            cache_note = f" ({', '.join(cache_bits)})" if cache_bits else ""
+            # patch_orchestrator96 (2026-09-19): etiqueta de proveedor en
+            # el log -- antes dec\u00eda siempre "Claude API" sin importar
+            # cu\u00e1l proveedor respondi\u00f3 de verdad.
+            _provider_label = (
+                "Gemini API"
+                if getattr(self, "cloud_provider", self.CLOUD_PROVIDER_ANTHROPIC)
+                == self.CLOUD_PROVIDER_GEMINI
+                else "Claude API"
+            )
+            with contextlib.suppress(Exception):
+                if is_en:
+                    log_cb(
+                        f"\u2601 {_provider_label} ({self.cloud_model_id}): {total_in_tokens} in{cache_note} / "
+                        f"{output_tokens} out tok \u2014 ${cost:.4f} "
+                        f"(session total: ${total_cost:.4f})"
+                    )
+                else:
+                    log_cb(
+                        f"\u2601 {_provider_label} ({self.cloud_model_id}): {total_in_tokens} in{cache_note} / "
+                        f"{output_tokens} out tok \u2014 ${cost:.4f} "
+                        f"(total sesi\u00f3n: ${total_cost:.4f})"
+                    )
 
     def _cloud_headers(self) -> Dict[str, str]:
         return {
@@ -15198,6 +16478,172 @@ class Orchestrator:
                 cloud=True,
             )
 
+    def _call_gemini_api_raw(
+        self,
+        prompt: str,
+        *,
+        system: str,
+        num_predict: Optional[int],
+        temperature: Optional[float],
+        stop: Optional[List[str]],
+        log_cb: Optional[Callable[[str], None]] = None,
+        perf_label: str = "LLM",
+        images: Optional[List[str]] = None,
+        suppress_write_file: bool = False,
+    ) -> Tuple[str, int, str]:
+        """
+        Equivalente Gemini de `_call_claude_api_raw` (patch_orchestrator96,
+        2026-09-19) -- mismo contrato de 3-tupla (texto_saneado,
+        eval_count, done_reason), mismo nombre y orden de parámetros, así
+        que `_call_llm_raw` puede elegir entre las dos funciones sin
+        cambiar nada más en el llamado. Ver el BLINDAJE junto a
+        `GEMINI_API_BASE` para el detalle de las diferencias de formato
+        con la Messages API de Anthropic.
+        """
+        parts: List[Dict[str, Any]] = []
+        if images:
+            for _img_b64 in images:
+                parts.append({
+                    "inline_data": {"mime_type": "image/png", "data": _img_b64},
+                })
+        parts.append({"text": prompt})
+
+        generation_config: Dict[str, Any] = {
+            "maxOutputTokens": int(num_predict) if num_predict else 2048,
+        }
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        if stop:
+            generation_config["stopSequences"] = list(stop)[:5]
+
+        body: Dict[str, Any] = {
+            "contents": [{"role": "user", "parts": parts}],
+            "systemInstruction": {"parts": [{"text": system}]},
+            "generationConfig": generation_config,
+        }
+        _tools = self._cloud_tools_schema_for_gemini(
+            exclude_tools={"write_file"} if suppress_write_file else None
+        )
+        if _tools:
+            body["tools"] = _tools
+
+        _model = self.cloud_model_id or self.GEMINI_DEFAULT_MODEL
+        _url = f"{self.GEMINI_API_BASE}/{_model}:generateContent"
+
+        _profile_start = time.perf_counter()
+        try:
+            resp = requests.post(
+                _url,
+                headers={
+                    "x-goog-api-key": self.cloud_api_key or "",
+                    "content-type": "application/json",
+                },
+                json=body,
+                timeout=180,
+            )
+            if resp.status_code != 200:
+                detail = ""
+                with contextlib.suppress(Exception):
+                    detail = resp.json().get("error", {}).get("message", "")
+                return (
+                    f"[ERROR] Gemini API devolvió HTTP {resp.status_code}: {detail}",
+                    0,
+                    "error",
+                )
+            data = resp.json()
+            candidates = data.get("candidates", []) or []
+            if not candidates:
+                # Bloqueo por safety filters u otro corte sin candidato
+                # (p. ej. `promptFeedback.blockReason`) -- distinto de un
+                # HTTP no-200, la API devuelve 200 con la lista vacía.
+                _block_reason = ""
+                with contextlib.suppress(Exception):
+                    _block_reason = (data.get("promptFeedback", {}) or {}).get(
+                        "blockReason", ""
+                    )
+                return (
+                    "[ERROR] Gemini API no devolvió ningún candidato"
+                    + (f" (blockReason: {_block_reason})" if _block_reason else "")
+                    + ".",
+                    0,
+                    "error",
+                )
+            cand = candidates[0]
+            cand_parts = (cand.get("content", {}) or {}).get("parts", []) or []
+            # BLINDAJE (2026-09-19, patch_orchestrator111 -- bug real,
+            # reportado con captura: el turno "explain the mario code of
+            # the workspace" mostró, ANTES de la respuesta real, un texto
+            # crudo tipo "Allocation burned: 0 out of 5426 budget tokens
+            # (~0%" -- el propio razonamiento interno ("thinking") de
+            # Gemini 3.x, un modelo con "thinking" activado por defecto.
+            # La API de Gemini marca cada parte de pensamiento con
+            # `"thought": true` en el mismo objeto `part` -- un `part` así
+            # SÍ trae una clave `"text"` (por eso `"text" in p` lo dejaba
+            # pasar sin filtrar), pero ese texto es el razonamiento
+            # interno del modelo, nunca pensado para mostrarse tal cual
+            # (acá terminaba narrando su propia contabilidad de
+            # presupuesto en vez de escribir la respuesta). Se descarta
+            # cualquier parte con `thought` verdadero ANTES de armar
+            # `raw_text` -- la respuesta visible real vive en las partes
+            # sin ese flag.
+            raw_text = "".join(
+                p.get("text", "") for p in cand_parts
+                if isinstance(p, dict) and "text" in p and not p.get("thought")
+            )
+            for p in cand_parts:
+                if isinstance(p, dict) and p.get("thought"):
+                    continue
+                if isinstance(p, dict) and "functionCall" in p:
+                    _fc = p.get("functionCall") or {}
+                    _synth_call = {"tool": _fc.get("name"), "parameters": _fc.get("args") or {}}
+                    raw_text += (
+                        ("\n\n" if raw_text.strip() else "")
+                        + "```json\n" + json.dumps(_synth_call, ensure_ascii=False) + "\n```"
+                    )
+                    break
+            clean_text = self._lexical_guard.sanitize(raw_text)
+            usage = data.get("usageMetadata", {}) or {}
+            in_tok = int(usage.get("promptTokenCount", 0) or 0)
+            out_tok = int(usage.get("candidatesTokenCount", 0) or 0)
+            cache_read_tok = int(usage.get("cachedContentTokenCount", 0) or 0)
+            finish_reason = str(cand.get("finishReason", "") or "")
+            # patch_orchestrator98 (2026-09-19) -- ver el BLINDAJE completo
+            # junto a la variante streaming (`_stream_gemini_api_raw`,
+            # el camino real de un turno normal) para el detalle del bug
+            # que motivó este cambio: cualquier finishReason que no sea
+            # "STOP" (o vacío) se trata como corte, no solo "MAX_TOKENS".
+            done_reason = "stop" if finish_reason in ("STOP", "") else "length"
+            if finish_reason and finish_reason not in ("STOP", "MAX_TOKENS") and log_cb is not None:
+                _is_en = getattr(self, "current_language", "Spanish") == "English"
+                with contextlib.suppress(Exception):
+                    log_cb(
+                        (
+                            f"⚠ Gemini cut the response early "
+                            f"(finishReason={finish_reason}, not a token-budget "
+                            f"cutoff -- possibly a safety/recitation filter)."
+                        ) if _is_en else (
+                            f"⚠ Gemini cortó la respuesta antes de tiempo "
+                            f"(finishReason={finish_reason}, no es un corte por "
+                            f"presupuesto de tokens -- posiblemente un filtro de "
+                            f"seguridad/recitación)."
+                        )
+                    )
+            self._account_cloud_usage(
+                in_tok, out_tok,
+                cache_read_tokens=cache_read_tok, cache_creation_tokens=0,
+                log_cb=log_cb,
+            )
+            return clean_text, out_tok, done_reason
+        except Exception as exc:
+            return f"[ERROR] Fallo de conexión con la API de Gemini: {exc}", 0, "error"
+        finally:
+            self._record_stage_duration(
+                "generation",
+                (time.perf_counter() - _profile_start) * 1000.0,
+                label=perf_label,
+                cloud=True,
+            )
+
     def _stream_claude_api_raw(
         self,
         prompt: str,
@@ -15286,6 +16732,24 @@ class Orchestrator:
                         0,
                         "error",
                     )
+                # patch_orchestrator99 (2026-09-19, bug real, MEDIDO --
+                # ver el BLINDAJE completo junto a la variante Gemini de
+                # esta misma línea, `_stream_gemini_api_raw`, donde se
+                # detectó primero): sin fijar `resp.encoding` a mano,
+                # `requests` adivina la codificación del stream SSE a
+                # partir del header Content-Type, y "text/event-stream"
+                # sin `charset` explícito cae en su default histórico de
+                # ISO-8859-1 para cualquier content-type que contenga
+                # "text" -- si el proveedor no manda `charset=utf-8` en
+                # ese header, cada línea del SSE se decodifica mal y
+                # cualquier tilde/ñ/¡/¿ queda mojibake (p. ej. "qué" ->
+                # "quÃ©"). No se confirmó el bug con Anthropic en esta
+                # sesión (puede que ya mande el charset explícito), pero
+                # el mismo `iter_lines(decode_unicode=True)` de acá
+                # abajo es idéntico al de Gemini, así que se corrige acá
+                # también por las dudas, sin esperar a que aparezca en
+                # vivo con este proveedor.
+                resp.encoding = "utf-8"
                 for line in resp.iter_lines(decode_unicode=True):
                     if not line or not line.startswith("data:"):
                         continue
@@ -15390,6 +16854,271 @@ class Orchestrator:
             log_cb=log_cb,
         )
         done_reason = "length" if stop_reason == "max_tokens" else "stop"
+        return clean_text, out_tok, done_reason
+
+    def _stream_gemini_api_raw(
+        self,
+        prompt: str,
+        *,
+        system: str,
+        num_predict: Optional[int],
+        temperature: Optional[float],
+        stop: Optional[List[str]],
+        log_cb: Optional[Callable[[str], None]] = None,
+        perf_label: str = "LLM",
+        images: Optional[List[str]] = None,
+        suppress_write_file: bool = False,
+    ):
+        """
+        Equivalente Gemini de `_stream_claude_api_raw`
+        (patch_orchestrator96, 2026-09-19) -- mismo contrato que
+        `_stream_llm_raw`: yield-ea cada fragmento de texto a medida que
+        llega y, al terminar, return-ea la 3-tupla (texto_saneado,
+        eval_count, done_reason) vía StopIteration.value.
+
+        Formato real de la Gemini API en modo streaming
+        (`:streamGenerateContent?alt=sse`): a diferencia del SSE con
+        EVENTOS TIPADOS de Anthropic (message_start/content_block_delta/
+        message_delta), cada línea `data: ...` de Gemini es un objeto
+        GenerateContentResponse COMPLETO (la misma forma que la
+        respuesta no-streaming) con solo el fragmento nuevo de esta
+        parte -- los `parts[].text` de cada chunk son INCREMENTALES (hay
+        que concatenarlos en orden, no reemplazan lo anterior), y
+        `usageMetadata`/`finishReason` solo vienen poblados de verdad en
+        el ÚLTIMO chunk -- se van pisando con el valor más reciente
+        visto, igual que hace `message_delta` del lado de Anthropic. A
+        diferencia de Anthropic (que arma una tool_use de a pedazos vía
+        `input_json_delta`, ver `_tool_blocks`/`_recover_partial_tool_
+        input` más abajo), en Gemini un `functionCall` llega COMPLETO en
+        un solo chunk -- no hace falta reensamblar JSON parcial acá.
+        """
+        parts: List[Dict[str, Any]] = []
+        if images:
+            for _img_b64 in images:
+                parts.append({
+                    "inline_data": {"mime_type": "image/png", "data": _img_b64},
+                })
+        parts.append({"text": prompt})
+
+        generation_config: Dict[str, Any] = {
+            "maxOutputTokens": int(num_predict) if num_predict else 2048,
+        }
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        if stop:
+            generation_config["stopSequences"] = list(stop)[:5]
+
+        body: Dict[str, Any] = {
+            "contents": [{"role": "user", "parts": parts}],
+            "systemInstruction": {"parts": [{"text": system}]},
+            "generationConfig": generation_config,
+        }
+        _tools = self._cloud_tools_schema_for_gemini(
+            exclude_tools={"write_file"} if suppress_write_file else None
+        )
+        if _tools:
+            body["tools"] = _tools
+
+        _model = self.cloud_model_id or self.GEMINI_DEFAULT_MODEL
+        _url = f"{self.GEMINI_API_BASE}/{_model}:streamGenerateContent?alt=sse"
+
+        accumulated = ""
+        in_tok = 0
+        out_tok = 0
+        cache_read_tok = 0
+        finish_reason = ""
+        _func_call: Optional[Dict[str, Any]] = None
+        _profile_start = time.perf_counter()
+        try:
+            with requests.post(
+                _url,
+                headers={
+                    "x-goog-api-key": self.cloud_api_key or "",
+                    "content-type": "application/json",
+                },
+                json=body,
+                stream=True,
+                timeout=180,
+            ) as resp:
+                if resp.status_code != 200:
+                    detail = ""
+                    with contextlib.suppress(Exception):
+                        detail = resp.json().get("error", {}).get("message", "")
+                    return (
+                        f"[ERROR] Gemini API devolvió HTTP {resp.status_code}: {detail}",
+                        0,
+                        "error",
+                    )
+                # patch_orchestrator99 (2026-09-19, bug real, MEDIDO por
+                # el usuario en vivo: el saludo generado por Gemini se
+                # veía como "Â¡Hola! Â¿En quÃ© te puedo ayudar hoy?" en
+                # vez de "¡Hola! ¿En qué te puedo ayudar hoy?"). Causa
+                # raíz: la API de Gemini en modo streaming
+                # (`:streamGenerateContent?alt=sse`) manda el header
+                # `Content-Type: text/event-stream` SIN `charset`
+                # explícito. `requests` adivina la codificación de la
+                # respuesta a partir de ese header
+                # (`get_encoding_from_headers`), y cualquier content-type
+                # que contenga la palabra "text" sin charset cae en su
+                # default histórico de ISO-8859-1 (heredado del RFC 2616,
+                # pensado para HTML/texto plano viejo, no para JSON/SSE
+                # moderno que en la práctica siempre es UTF-8). Con
+                # `resp.encoding` mal seteado a ISO-8859-1,
+                # `resp.iter_lines(decode_unicode=True)` decodifica cada
+                # línea del SSE con ese codec incorrecto -- cada
+                # caracter UTF-8 de 2 bytes (tildes, ñ, ¡, ¿) se separa
+                # en DOS caracteres Latin-1 distintos (p. ej. los bytes
+                # UTF-8 de "é" se leen como "Ã©"), y el string Python
+                # resultante queda con la corrupción ya "cocinada"
+                # adentro -- no es un problema de fuente/rendering en la
+                # UI, el texto llega mal armado desde acá. Fix: fijar
+                # `resp.encoding = "utf-8"` a mano antes de iterar,
+                # ignorando lo que `requests` haya adivinado del header.
+                # Aplicado también a `_stream_claude_api_raw` (mismo
+                # patrón de `iter_lines`, aunque no se confirmó el bug en
+                # vivo con Anthropic todavía) -- ver ese BLINDAJE para el
+                # detalle. La variante NO-streaming (`_call_gemini_api_
+                # raw`, más arriba) no tiene este problema: usa
+                # `resp.json()`, y `requests` sí trata
+                # "application/json" como UTF-8 por default (ver
+                # `get_encoding_from_headers`), a diferencia de
+                # "text/event-stream".
+                resp.encoding = "utf-8"
+                for line in resp.iter_lines(decode_unicode=True):
+                    if not line or not line.startswith("data:"):
+                        continue
+                    raw = line[len("data:"):].strip()
+                    if not raw:
+                        continue
+                    try:
+                        evt = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    candidates = evt.get("candidates", []) or []
+                    if candidates:
+                        cand = candidates[0]
+                        _fr = cand.get("finishReason")
+                        if _fr:
+                            finish_reason = str(_fr)
+                        for p in (cand.get("content", {}) or {}).get("parts", []) or []:
+                            if not isinstance(p, dict):
+                                continue
+                            # BLINDAJE (2026-09-19, patch_orchestrator111 --
+                            # ver el mismo BLINDAJE en `_call_gemini_api_
+                            # raw`, la variante no-streaming, para el
+                            # diagnóstico completo): Gemini 3.x manda su
+                            # "thinking" interno como partes normales con
+                            # `"text"`, marcadas aparte con `"thought":
+                            # true` -- sin este chequeo, ese razonamiento se
+                            # yield-eaba en vivo como si fuera la respuesta
+                            # real, visible en pantalla ANTES de la
+                            # respuesta de verdad (el bug real, reportado:
+                            # "Allocation burned: 0 out of 5426 budget
+                            # tokens..." apareciendo solo, antes de que
+                            # llegara el tool call/la explicación real).
+                            if p.get("thought"):
+                                continue
+                            if "text" in p:
+                                chunk = p.get("text", "")
+                                if chunk:
+                                    accumulated += chunk
+                                    yield chunk
+                            elif "functionCall" in p:
+                                _func_call = p.get("functionCall") or {}
+                    _usage = evt.get("usageMetadata", {}) or {}
+                    if _usage:
+                        in_tok = int(_usage.get("promptTokenCount", in_tok) or in_tok)
+                        out_tok = int(_usage.get("candidatesTokenCount", out_tok) or out_tok)
+                        cache_read_tok = int(
+                            _usage.get("cachedContentTokenCount", cache_read_tok)
+                            or cache_read_tok
+                        )
+        except Exception as exc:
+            if len(accumulated.strip()) > 40:
+                clean_partial = self._lexical_guard.sanitize(accumulated)
+                self._account_cloud_usage(
+                    in_tok, out_tok,
+                    cache_read_tokens=cache_read_tok, cache_creation_tokens=0,
+                    log_cb=log_cb,
+                )
+                return clean_partial, out_tok, "error"
+            return f"[ERROR] Fallo de streaming con la API de Gemini: {exc}", 0, "error"
+        finally:
+            self._record_stage_duration(
+                "generation",
+                (time.perf_counter() - _profile_start) * 1000.0,
+                label=perf_label,
+                streaming=True,
+                cloud=True,
+            )
+
+        if _func_call:
+            _synth_call = {
+                "tool": _func_call.get("name"), "parameters": _func_call.get("args") or {},
+            }
+            accumulated += (
+                ("\n\n" if accumulated.strip() else "")
+                + "```json\n" + json.dumps(_synth_call, ensure_ascii=False) + "\n```"
+            )
+        clean_text = self._lexical_guard.sanitize(accumulated)
+        self._account_cloud_usage(
+            in_tok, out_tok,
+            cache_read_tokens=cache_read_tok, cache_creation_tokens=0,
+            log_cb=log_cb,
+        )
+        # BLINDAJE (2026-09-19, patch_orchestrator98 -- bug real, MEDIDO
+        # por el usuario en vivo apenas Gemini quedó funcionando: turno
+        # "mejora ese codigo" sobre minesweeper.py, herramientas de
+        # workspace desactivadas -- Gemini devolvió una respuesta de
+        # texto plano con el código, pero el bloque terminaba cortado a
+        # mitad de una expresión booleana ("... or" seguido de nada),
+        # sintácticamente inválido, y la consola igual mostró "✓ sin
+        # problemas" -- ningún mecanismo de rescate se activó). Causa
+        # raíz: antes de este patch, `done_reason` solo se marcaba
+        # "length" (la señal que el resto del pipeline usa para saber
+        # que hay que rescatar/continuar una respuesta cortada -- ver
+        # `_looks_truncated`/la rama de continuación en `run_turn`)
+        # cuando `finishReason == "MAX_TOKENS"` -- CUALQUIER otro
+        # finishReason que no fuera "STOP" (p. ej. "SAFETY",
+        # "RECITATION" -- códigos muy comunes/genéricos como una
+        # validación de límites de tablero son un disparador típico del
+        # filtro de recitación de Google -- "PROHIBITED_CONTENT",
+        # "BLOCKLIST", "MALFORMED_FUNCTION_CALL", "OTHER") caía al
+        # default "stop", como si la generación hubiera terminado bien.
+        # 677 tokens de salida sobre un techo de 2400 confirma que NO
+        # fue un corte por presupuesto (ese caso ya estaba cubierto) --
+        # tuvo que ser alguno de estos otros finishReason.
+        #
+        # Fix: cualquier finishReason que no sea "STOP" (o vacío, caso
+        # no documentado por la API) se trata como corte -- se reusa
+        # deliberadamente el mismo done_reason="length" que ya dispara
+        # el pipeline de continuación/rescate existente (en vez de
+        # inventar un 4to valor que ningún call-site sabría interpretar
+        # y que, sin manejo explícito, volvería a caer en el mismo bug).
+        # Es una elección consciente, no una imprecisión: seguir
+        # pidiendo MÁS TOKENS no ayuda si el corte fue por un filtro de
+        # contenido (podría volver a bloquear igual), pero el rescate
+        # LOCAL (Ollama, sin costo, ver `_rescue_truncated_edit_file_
+        # locally`/la continuación de `run_turn`) no pasa por los
+        # filtros de Gemini y sí puede terminar el código reintentando
+        # con el modelo local -- mejor eso que devolver silenciosamente
+        # un fragmento incompleto marcado como turno exitoso.
+        done_reason = "stop" if finish_reason in ("STOP", "") else "length"
+        if finish_reason and finish_reason not in ("STOP", "MAX_TOKENS") and log_cb is not None:
+            _is_en = getattr(self, "current_language", "Spanish") == "English"
+            with contextlib.suppress(Exception):
+                log_cb(
+                    (
+                        f"⚠ Gemini cut the response early "
+                        f"(finishReason={finish_reason}, not a token-budget "
+                        f"cutoff -- possibly a safety/recitation filter)."
+                    ) if _is_en else (
+                        f"⚠ Gemini cortó la respuesta antes de tiempo "
+                        f"(finishReason={finish_reason}, no es un corte por "
+                        f"presupuesto de tokens -- posiblemente un filtro de "
+                        f"seguridad/recitación)."
+                    )
+                )
         return clean_text, out_tok, done_reason
 
     @staticmethod
@@ -15711,7 +17440,16 @@ class Orchestrator:
         # router_model`/`vision_model` -- ver la nota grande arriba de
         # este método.
         if self.cloud_backend_enabled and self.cloud_api_key and not force_local:
-            return self._call_claude_api_raw(
+            # patch_orchestrator96 (2026-09-19): despacha al proveedor de
+            # Nube activo -- mismo contrato de 3-tupla en las dos
+            # funciones, así que este bloque no necesita saber más que
+            # cuál elegir. Ver el BLINDAJE junto a `GEMINI_API_BASE`.
+            _cloud_call_fn = (
+                self._call_gemini_api_raw
+                if self.cloud_provider == self.CLOUD_PROVIDER_GEMINI
+                else self._call_claude_api_raw
+            )
+            return _cloud_call_fn(
                 payload["prompt"],
                 system=payload["system"],
                 num_predict=payload["options"].get("num_predict"),
@@ -15887,7 +17625,14 @@ class Orchestrator:
             images=images,
         )
         if self.cloud_backend_enabled and self.cloud_api_key and not force_local:
-            result = yield from self._stream_claude_api_raw(
+            # patch_orchestrator96 (2026-09-19): mismo despacho por
+            # proveedor que en `_call_llm_raw` -- ver ese comentario.
+            _cloud_stream_fn = (
+                self._stream_gemini_api_raw
+                if self.cloud_provider == self.CLOUD_PROVIDER_GEMINI
+                else self._stream_claude_api_raw
+            )
+            result = yield from _cloud_stream_fn(
                 payload["prompt"],
                 system=payload["system"],
                 num_predict=payload["options"].get("num_predict"),
@@ -16285,24 +18030,45 @@ class Orchestrator:
         este turno (mismo `if not force_web_search:` en ambas rutas),
         evitando servir una respuesta vieja sin el grounding nuevo.
 
-        SignalTag.WEB_SEARCH_INTENT (rediseño de UI, pedido explícito del
-        usuario: "que la IA decida sola cuándo buscar, sin que yo tenga
-        que forzarlo"): esta señal ya la calculaba IntentRouter.classify()
-        desde antes (patrones de "consulta dependiente de actualidad",
-        con exclusión mutua ya afinada contra CODE_COMPLEX y seguimiento
-        conversacional simple — ver router.py), pero SOLO se usaba para
-        disparar la búsqueda en `process_turn`, no en `run_turn` — el
-        camino real que usa la UI de streaming (sovnode_qt.py). Antes de
-        este fix, `run_turn` dependía enteramente de un botón manual (🌐,
-        ya eliminado de la UI) para que el usuario "avisara" que hacía
-        falta buscar; ahora ambas rutas heredan el mismo criterio
-        automático desde este único método, sin necesidad de ningún
-        control manual — reemplaza al botón en vez de sumarse a él.
-        `requested` se conserva como parámetro (en vez de borrarlo del
-        todo) para no romper la firma de run_turn/process_turn ni a
-        quien los llame programáticamente pidiendo grounding explícito
-        (p. ej. una futura integración o un test) — simplemente ya no
-        hay ningún control de UI que lo setee a True.
+        SignalTag.WEB_SEARCH_INTENT -- HISTÓRICO, ya NO fuerza búsqueda
+        (ver BLINDAJE `patch_orchestrator104` de abajo): entre 2026-09-18
+        y 2026-09-19 esta señal SÍ forzaba una búsqueda pre-emptiva
+        (rediseño de UI, pedido explícito del usuario en ese momento:
+        "que la IA decida sola cuándo buscar, sin que yo tenga que
+        forzarlo") -- pero la implementación real seguía siendo un router
+        determinista y SIN memoria de la conversación adivinando de
+        antemano, nunca el modelo "decidiendo" en el sentido que pidió el
+        usuario. Eso causó una clase de bug recurrente y medida DOS veces
+        en la práctica ("create a playable asteroids..." -> Wikipedia/
+        Space Invaders irrelevantes, `patch_router1`; "add random cool
+        things to the game" -> hamburguesa/SEO irrelevantes,
+        `patch_router2`) -- cualquier turno de edición de código que
+        usara "game"/"code" sin nombrar el archivo ni un verbo de
+        programación explícito podía confundirse con una consulta de
+        actualidad, sin importar cuántos parches de regex se sumaran
+        (`_CODE_COMPLEX_PATTERN`, `_GENERIC_EDIT_CONTINUATION_RE`, ambos
+        en router.py) -- cada frase nueva que un usuario inventara podía
+        volver a colarse.
+
+        BLINDAJE (2026-09-19, patch_orchestrator104 -- pedido explícito
+        del usuario tras discutir 3 alternativas: "la 3 me parece
+        perfecta"): se retira `SignalTag.WEB_SEARCH_INTENT` de esta
+        condición -- ahora `web_search` es una herramienta agéntica real
+        más (ver `CLOUD_TOOLS_SCHEMA`/`TOOLS_SCHEMA`/
+        `execute_tool_from_call`), exactamente igual que `read_file`/
+        `write_file`: el MODELO decide, en medio del turno, con la
+        conversación completa ya en la cabeza (a diferencia de este
+        router, que solo ve el texto crudo de un turno aislado) --
+        cumpliendo por fin, de verdad, el pedido original del usuario de
+        2026-09-18 citado arriba, en vez de la aproximación heurística
+        que se había implementado en su lugar. `SignalTag.FACTUAL_
+        ENUMERATION` (arriba) es la EXCEPCIÓN deliberada que se mantiene
+        forzando: ese es un bug estructuralmente distinto (un modelo
+        local chico puede no saber que no sabe un dato -- ningún
+        tool-calling nativo arregla eso, porque el modelo nunca va a
+        pedir ayuda para algo que cree saber bien; la única corrección
+        posible sigue siendo inyectar evidencia externa de antemano, sin
+        esperar a que el modelo la pida).
 
         Único punto de verdad para este criterio: run_turn y
         process_turn llaman a este mismo método, para que las dos rutas
@@ -16311,7 +18077,6 @@ class Orchestrator:
         return (
             bool(requested)
             or SignalTag.FACTUAL_ENUMERATION in decision.tags
-            or SignalTag.WEB_SEARCH_INTENT in decision.tags
         )
 
     @classmethod
@@ -17278,7 +19043,7 @@ class Orchestrator:
 
             logger.info("🛡️ [Control de Bucles] Iteración autónoma %d/%d — Ejecutando: %s", iteration + 1, max_iterations, tool_name)
 
-            tool_output = self.execute_tool_from_call(tool_call)
+            tool_output = self.execute_tool_from_call(tool_call, lang=lang)
             
             if "FALLO DE HERRAMIENTA" in tool_output:
                 follow_up_prompt = (

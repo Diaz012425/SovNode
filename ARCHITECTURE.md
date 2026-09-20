@@ -448,10 +448,18 @@ devuelve bloques `tool_use` reales. `_call_claude_api_raw`/
 mismo formato interno `` ```json {"tool": ...} ``` `` — así el resto del
 pipeline (el mismo `execute_tool_from_call`, los mismos guards de
 riesgo/falso-éxito/ruta-alucinada) no necesita saber ni le importa qué
-motor respondió. `CLOUD_TOOLS_SCHEMA` hoy tiene 6 herramientas:
+motor respondió. `CLOUD_TOOLS_SCHEMA` hoy tiene 7 herramientas:
 `write_file`, `edit_file`, `read_file`, `list_dir`, `run_cmd`,
-`system_telemetry` (el comentario del código que dice "5" quedó
-desactualizado tras agregar `edit_file`, ver §10).
+`system_telemetry`, `web_search` (el comentario del código que dice "5"
+quedó desactualizado tras agregar `edit_file`, ver §10). `web_search`
+(`patch_orchestrator104`, §8 ítem 43) es la incorporación más reciente:
+antes de ese patch, la búsqueda web NUNCA fue una herramienta agéntica
+real -- vivía en un pipeline aparte que decidía buscar o no ANTES de que
+el modelo viera el mensaje del usuario (`_should_force_web_search`,
+gateado por el router determinista de `router.py`). Ahora es una
+herramienta más, exactamente igual que `read_file`/`write_file`: el
+modelo la pide cuando la necesita, con la conversación completa ya en la
+cabeza.
 
 ### 5.3 Routing granular Local/Cloud (`force_local`)
 
@@ -3094,6 +3102,2100 @@ antes de comitear; backup del archivo pre-fix guardado como
     espacio/punto distinto al nombre real del archivo ("agar io"/
     "agar.io") -- confirmar que las tres resuelven al archivo/intención
     correctos en vez de perderse como el turno de patch89.
+
+28. **Dos hallazgos reales reportados por el usuario mirando una captura de
+    consola grabada para un video de showcase, con la UI cambiada a
+    inglés a mitad de sesión** (`[16:37:06] Language changed to:
+    English`): (a) varias líneas de la consola/UI seguían en español
+    pese al cambio de idioma, y (b) al abrir el build empaquetado en
+    `dist/` la API key de Cloud ya aparecía cargada, y el usuario pidió
+    "que no se guarde mi api de claude" -- investigado y se confirmó que
+    NO es una fuga a otros archivos/usuarios: `QSettings("SovNode",
+    "SovNode")` en `sovnode_qt.py` usa el formato nativo de Qt en
+    Windows (Registro, bajo el usuario de Windows actual), compartido
+    por cualquier build/copia de la app corrida en esa misma cuenta --
+    pero sí se confirmó que hoy no hay forma de usar la key sin que
+    quede guardada (`cloud_key_input.editingFinished` dispara
+    `settings.setValue("cloud/api_key", ...)` sin pedir confirmación ni
+    ofrecer opt-out). Decisión del usuario (vía pregunta explícita):
+    mantener el guardado automático (más cómodo siendo el único usuario
+    de ese equipo), pero agregar un botón para borrarla.
+
+    - **Idioma (`patch_orchestrator93` + `patch_qt65`)**: alcance
+      acotado a lo VISIBLE en el panel de consola/chat (no auditoría
+      completa del codebase, decisión explícita del usuario por tener
+      la grabación cerca). Se encontraron tres causas distintas, no una
+      sola:
+      1. `_account_cloud_usage` (orchestrator.py, ~L14996) armaba el
+         resumen `☁ Claude API (...): N in (X leídos de caché, Y nuevos
+         en caché) / Z out tok — $costo (total sesión: $total)` sin
+         NINGUNA rama de idioma -- a diferencia de casi todo el resto
+         del archivo, que ya usa el patrón `is_en = getattr(self,
+         "current_language", "Spanish") == "English"`. Se le agregó esa
+         misma rama. Backup `orchestrator.py.bak78_pre_patch93`
+         (1083736→1085013 bytes).
+      2. Tres líneas de log en `sovnode_qt.py` (dentro de la búsqueda
+         Wikipedia embebida ahí mismo, no en `src/tools/web_search.py`):
+         `"[WEB_SEARCH] Consultando Wikipedia (dato puntual/respaldo)..."`
+         (~L644) y dos ocurrencias idénticas de
+         `"[WEB_SEARCH] Wikipedia sin fuente específica.../sin resultado
+         útil..."` (~L771 y ~L943, mismo bloque duplicado dos veces en la
+         función) nunca tuvieron rama de idioma, a diferencia de
+         `search_web()`/`search_topic_images()` (que sí reciben `lang=`
+         y arman el mensaje ya traducido -- por eso ESAS líneas sí
+         aparecían en inglés en la captura del usuario, mezcladas con
+         estas otras tres que no). Se les agregó rama usando
+         `resolved_lang`, ya en scope en el mismo punto (se usa dos
+         líneas después para elegir `wiki_domain`). Existía además una
+         tabla de traducción por regex (`_WEB_SEARCH_LOG_TRANSLATIONS` /
+         `_translate_web_search_log`, ~L470-550) pensada aparentemente
+         para resolver este mismo problema de forma genérica -- pero
+         **nunca se llama desde ningún lado del archivo** (código
+         muerto, confirmado por grep). No se activó ni se depende de
+         ella en este fix; queda documentada acá por si una sesión
+         futura la encuentra y asume que está en uso.
+      3. Tres widgets del panel de consola creados una sola vez en
+         `_create_ui()` con texto hardcodeado en español y nunca
+         agregados a `_on_lang_changed` (la función que sí re-traduce
+         otros widgets estáticos al cambiar idioma -- tiene un
+         comentario `BLINDAJE (bug real reportado)` de un fix anterior
+         para ese mismo patrón, aplicado a OTRO grupo de widgets, que
+         se olvidó de incluir estos tres): el título `QLabel("🖥️
+         CONSOLA DE SISTEMA / LOGS")`, el botón `QPushButton("Limpiar")`
+         y el checkbox `chk_advanced_terminal` (este último SÍ tenía
+         entrada en `I18N` para ambos idiomas, solo le faltaba la
+         llamada `.setText()`/`.setToolTip()` en `_on_lang_changed`).
+         Se guardaron título y botón como `self.term_title`/
+         `self.btn_clear_term` (antes variables locales, no
+         referenciables después), se agregaron las claves `I18N`
+         `terminal_console_title`/`btn_clear_terminal` en ambos idiomas,
+         y se sumaron los tres al bloque de re-traducción existente.
+         Backup `sovnode_qt.py.bak13_pre_patch_qt65` (353443→359734
+         bytes, incluye también el fix de API key de abajo).
+
+    - **API key (`patch_qt65`, mismo commit)**: se agregó un botón
+      "Olvidar key guardada" / "Forget saved key" (`btn_forget_cloud_key`,
+      junto a "Probar conexión") que llama a
+      `_on_forget_cloud_key_clicked`: `settings.remove("cloud/api_key")`
+      sobre el mismo `QSettings("SovNode","SovNode")`, limpia
+      `cloud_key_input` y reaplica `set_cloud_backend(..., api_key=None)`
+      para que tampoco quede la key vieja en memoria durante la sesión
+      actual. No cambia el guardado automático existente (decisión
+      explícita del usuario), no toca el resto de la config (presupuesto
+      Cloud, etc.). El botón y su tooltip también se agregaron a
+      `_on_lang_changed`.
+
+    Ambos archivos verificados con `ast.parse` en el sandbox y de nuevo
+    con el Python del propio dispositivo (3.10.12) después de comitear,
+    tamaños re-verificados byte a byte en ambos lados. Commit al
+    dispositivo exitoso al primer intento (backups + archivos
+    principales, 4 archivos en un solo `device_commit_files`). Pendiente
+    de retest en vivo: repetir un turno con la UI en inglés y confirmar
+    que la consola queda 100% en inglés (contadores de caché incluidos),
+    y probar el botón "Forget saved key" seguido de reabrir la app para
+    confirmar que el campo queda vacío.
+
+29. **`patch_orchestrator94` + `patch_router1` (2026-09-18) — bug real,
+    MEDIDO por el usuario en una grabación de showcase**: el turno
+    "create a playable asteroids with a ship, shooting, and score in the
+    workspace" disparó una búsqueda web completa (DuckDuckGo + Wikipedia,
+    ~2.5-4s de timeouts de scraping) que devolvió fuentes sin ninguna
+    relación ("List of Google Easter eggs", "Space Invaders") -- el
+    propio modelo lo notó y las ignoró ("Note: the retrieved sources are
+    unrelated to this request... so they weren't used"), pero el turno
+    igual pagó el costo completo de la búsqueda para nada. El usuario
+    interpretó esto (y la consola del ítem 28 mezclada en la misma
+    sesión) como "bugs que pasan cuando se manda en inglés" y pidió
+    identificar la causa.
+
+    Causa real, confirmada leyendo `router.py` (no es un problema de
+    idioma en sí, aunque el caso concreto ocurrió en inglés):
+    `SignalTag.CODE_COMPLEX` y `SignalTag.WEB_SEARCH_INTENT` tienen
+    exclusión mutua a propósito (`_should_force_web_search`/
+    `IntentRouter.classify`, ver docstrings ahí) -- un pedido de
+    desarrollo de juego NUNCA debería disparar búsqueda web. Pero
+    `_CODE_COMPLEX_PATTERN` (router.py) es, según su propio comentario
+    ya existente, un ESPEJO manual de
+    `Orchestrator._RUNNABLE_PROGRAM_NOUN_RE`/`_WRITE_ARTIFACT_NOUN`
+    (orchestrator.py) -- las dos listas de "nombres de juego que cuentan
+    como código sin ambigüedad" tienen que coincidir o divergen. Y
+    divergieron: el ítem 27 de este documento (`patch_orchestrator91`,
+    sesión anterior, mismo día) agregó `doom|agario|agar.io|mario|
+    minecraft|buscaminas|minesweeper|ajedrez|chess|asteroids?|invaders?`
+    a las dos listas de orchestrator.py, pero nadie las volvió a copiar a
+    router.py -- quedó con la lista vieja (`snake|tetris|pong|pac-man|
+    breakout|arkanoid|2048|flappy`, sin "asteroids"), así que
+    `_CODE_COMPLEX_PATTERN` no matcheaba, `WEB_SEARCH_INTENT` quedaba sin
+    neutralizar, y el turno buscaba en la web como si "asteroids" fuera
+    una consulta factual cualquiera. Mismo patrón EXACTO al bug ya
+    documentado en el comentario BLINDAJE de esa misma función (snake/
+    pong/tetris, 2026-09-09) -- la lección de "mantener las dos listas
+    sincronizadas" ya estaba escrita ahí mismo y no se siguió al hacer
+    el patch91.
+
+    Al revisar el espejo se encontró además que NINGUNA de las dos
+    listas tenía la forma en español de "asteroids"/"invaders"
+    ("asteroides"/"invasores") -- confirmado con `crea un asteroides
+    jugable` fallando el mismo patrón antes del fix. No es que el bug
+    sea específico de inglés: es que la palabra que faltaba esta vez
+    resultó ser la forma en inglés, pero el hueco en español ya estaba
+    ahí también, sin haber sido ejercitado todavía. Se agregó
+    `asteroides`/`invasores` a las tres listas (las dos de
+    orchestrator.py + la de router.py) para cerrar ambos huecos de una.
+
+    Verificado con un script standalone (4 casos: la frase real que
+    falló, su equivalente en español, y dos variantes de "invaders" en
+    cada idioma) -- las 4 matchean después del fix, ninguna antes.
+    `ast.parse` OK en los dos archivos. Backups
+    `orchestrator.py.bak79_pre_patch94` (1085013→1085055 bytes) y
+    `router.py.bak1_pre_patch_router1` (45277→46553 bytes, primera vez
+    que se toca este archivo en esta sesión). Commit al dispositivo
+    exitoso al primer intento, bytes re-verificados con el Python del
+    propio dispositivo. Pendiente de retest en vivo: repetir el turno
+    real de asteroids en inglés y confirmar que NO dispara búsqueda web
+    esta vez (router=slow_path por otras señales está bien, lo que no
+    debe pasar es el paso de WEB_SEARCH); repetir el equivalente en
+    español ("crea un asteroides jugable") para confirmar el mismo
+    resultado. Nota aparte para la próxima sesión que toque cualquiera
+    de estas dos listas de nombres de juego: **son DOS copias
+    independientes en DOS archivos, actualizar una sin la otra
+    reintroduce este mismo bug** -- valdría la pena, en algún momento,
+    extraerla a una sola constante compartida importada por ambos
+    módulos en vez de seguir confiando en que el próximo patch se
+    acuerde de espejarla a mano.
+
+30. **`patch_orchestrator95` (2026-09-18) — bug real, MEDIDO**: turno
+    "improve that code and tell me what you implemented" sobre
+    `minesweeper.py` (3340 bytes) devolvió un `edit_file` de apenas 9
+    bytes de diferencia pese a reportar "Done" -- el usuario preguntó
+    directamente por qué no podía completar ese pedido en inglés.
+    Diagnóstico: no es un bug de idioma (no se encontró ninguna
+    ramificación por idioma en el camino de `edit_file`/budget), es un
+    techo de tokens demasiado ajustado. Con el `_EDIT_FILE_BUDGET_
+    MULTIPLIER` viejo (2.75x) el techo dinámico para ese archivo daba
+    2786 tokens; la pasada de Sonnet gastó exactamente esos 2786 tokens
+    (`done_reason == "length"`, corte a mitad de generación) -- $0.0426
+    pagados por un JSON de `edit_file` truncado que se tuvo que
+    descartar entero por no ser seguro de empalmar. `_rescue_truncated_
+    edit_file_locally` reintentó la misma pasada en Ollama local (sin
+    costo, presupuesto grande) pero, al ser un modelo mucho más chico,
+    no reprodujo la mejora ambiciosa que Sonnet había arrancado a
+    escribir -- devolvió un cambio casi nulo, reportado como "Done" sin
+    avisar de la degradación. Se le presentaron al usuario 3 opciones
+    (subir el techo / avisar explícitamente cuando el rescate local
+    produce un resultado mucho más chico que lo truncado / investigar si
+    había alguna causa específica de inglés) y eligió la primera, con la
+    instrucción explícita de que el corte sea "lo menos frecuente
+    posible".
+
+    Fix: `_EDIT_FILE_BUDGET_MULTIPLIER` subido de 2.75x a 4.0x, con la
+    misma lógica de margen de crecimiento que ya usa
+    `_dynamic_write_budget_tokens` (ítem previo de esta sección)
+    aplicada esta vez a `new_str`: old_str (1.0x, el texto viejo tal
+    cual) + new_str con margen real de CRECIMIENTO para pedidos amplios
+    tipo "mejora este código" (2.0x, el doble del tamaño actual, no solo
+    1.0x como asumía el valor viejo) + sobrecarga estructural/escapado
+    de tener dos campos en vez de uno (1.0x, más margen que el 0.75x
+    anterior). Sigue sin estar calibrado contra generaciones reales
+    (mismo criterio que el resto de las constantes de esta sección) --
+    es una segunda estimación razonada, no una medición; solo puede
+    SUBIR el techo real (nunca bajarlo) sobre lo que ya daba el selector
+    de presupuesto Bajo/Medio/Alto/Extra, igual que antes. Argumento de
+    costo: una pasada que ya entraba dentro del techo viejo no gasta más
+    por tener un techo más alto (el modelo para cuando termina, no
+    cuando se le acaba el margen) -- subir este multiplicador no le suma
+    costo a los turnos que ya andaban bien, solo evita el ciclo completo
+    de "pagar Sonnet truncado + descartarlo + reintentar en Local con
+    peor resultado" en los turnos que SÍ se quedaban cortos, que es puro
+    desperdicio de dinero y tiempo.
+
+    `ast.parse` OK en el sandbox y de nuevo con el Python del propio
+    dispositivo (3.10.12) en las dos carpetas. Backup
+    `orchestrator.py.bak80_pre_patch95` (1085055 bytes, estado
+    patch94/patch_router1) creado antes de comitear. Commit al
+    dispositivo exitoso al primer intento en `MonolitoPersonal`
+    (1085055→1087219 bytes) y sincronizado también a
+    `MonolitoPersonal-GitHub` (misma carpeta que sigue quedando
+    desactualizada respecto a la principal cada vez que se patchea solo
+    una copia -- sigue pendiente que el usuario confirme cuál de las dos
+    carpetas es la que usa para probar de ahora en más). Pendiente de
+    retest en vivo: repetir el mismo turno "improve that code..." sobre
+    `minesweeper.py` (o un archivo de tamaño similar) y confirmar que ya
+    no corta a mitad de generación.
+
+31. **`patch_orchestrator96` + `patch_qt66` (2026-09-19) — feature nueva,
+    pedido explícito del usuario: "se me acabaron los creditos, podemos
+    usar el modelo de gemini tambien?"**. Hasta este patch el motor de
+    Nube solo sabía hablar el formato de la Messages API de Anthropic
+    (headers `x-api-key`/`anthropic-version`, `system`/`messages`/
+    `max_tokens`, `tools[].input_schema`, SSE con eventos tipados
+    `message_start`/`content_block_delta`/`message_delta`,
+    `usage.input_tokens`/`output_tokens`) -- agregar Gemini fue una
+    integración nueva, no un cambio de URL: la Gemini Developer API
+    (`generativelanguage.googleapis.com`) usa header `x-goog-api-key`,
+    cuerpo `contents`/`systemInstruction`/`generationConfig`,
+    `tools[].functionDeclarations` en vez de `input_schema` por
+    herramienta, SSE con un objeto `candidates` COMPLETO por chunk (no
+    eventos tipados -- los `parts[].text` de cada chunk son
+    incrementales, se concatenan en orden) y
+    `usageMetadata.promptTokenCount`/`candidatesTokenCount` en vez de
+    `usage.input_tokens`/`output_tokens`.
+
+    Arquitectura del fix (orchestrator.py): nuevo `self.cloud_provider`
+    ("anthropic"|"gemini", default "anthropic") -- `set_cloud_backend`
+    ahora acepta un tercer parámetro `provider`. Dos funciones nuevas,
+    paralelas directas de las existentes y con el MISMO contrato de
+    3-tupla/generador -- `_call_gemini_api_raw` (equivalente de
+    `_call_claude_api_raw`) y `_stream_gemini_api_raw` (equivalente de
+    `_stream_claude_api_raw`) -- más `_cloud_tools_schema_for_gemini`
+    (reformatea `CLOUD_TOOLS_SCHEMA` al esquema de function-calling de
+    Gemini, sacando `cache_control` que Gemini no entiende). Los ÚNICOS
+    2 call sites reales de despacho (`_call_llm_raw`/`_stream_llm_raw`)
+    ahora eligen entre las dos funciones según `self.cloud_provider` en
+    vez de llamar siempre a la variante Claude -- los otros 2 lugares
+    que parecían "call sites" (vision, query-rewrite) en realidad pasan
+    por esos dos métodos compartidos, así que no necesitaron tocarse.
+    Precios (`GEMINI_PRICING_USD_PER_MTOK`, solo gemini-2.5-flash y
+    gemini-2.5-pro, verificados en ai.google.dev/gemini-api/docs/pricing
+    el día de este patch -- NO calibrados contra uso real, mismo
+    criterio que el resto de constantes de presupuesto) y helpers
+    `_cloud_pricing_table()`/`_cloud_default_model_for_provider()`
+    nuevos para que `_cloud_output_ceiling_tokens_for_cents` (el techo
+    de tokens) y `_account_cloud_usage` (el costo real facturado)
+    calculen con la tabla del proveedor ACTIVO en vez de asumir siempre
+    Anthropic -- un modelo Gemini que no esté en la tabla cae al precio
+    de `GEMINI_DEFAULT_MODEL` (gemini-2.5-flash) para el estimado, mismo
+    patrón de fallback que ya existía del lado de Anthropic. El log de
+    consola de cada llamada ("☁ Claude API (...)") ahora muestra
+    "Gemini API" cuando corresponde -- antes decía siempre "Claude API"
+    sin importar quién respondió de verdad.
+
+    UI (sovnode_qt.py): nuevo selector "Proveedor de Nube" (Claude/
+    Gemini, `combo_cloud_provider`) DENTRO del motor "Nube" ya existente
+    (el combo Local/Nube de arriba elige el MOTOR, este elige cuál API
+    externa). API key y modelo se guardan POR PROVEEDOR en QSettings
+    (`cloud/api_key_anthropic`/`cloud/api_key_gemini`,
+    `cloud/model_id_anthropic`/`cloud/model_id_gemini`) en vez de una
+    sola clave compartida -- migración NO DESTRUCTIVA desde las claves
+    viejas `cloud/api_key`/`cloud/model_id` (se interpretan como las de
+    Anthropic) si las nuevas todavía no existen, así que una instalación
+    con la key de Claude ya guardada no la pierde al actualizar; se
+    sigue escribiendo también la clave legacy al editar la key de
+    Anthropic, por compatibilidad hacia atrás con una copia de la app
+    sin este patch. Cambiar de proveedor recarga la key/modelo guardados
+    de ESE proveedor (`_on_cloud_provider_changed`) en vez de dejar en
+    el campo la key vieja, que no serviría de nada contra la API nueva.
+    "Olvidar key guardada" ahora borra solo la del proveedor activo.
+    `CloudKeyCheckWorker` (botón "Probar conexión") ahora sabe armar el
+    request de prueba (1 token de salida) contra cualquiera de las dos
+    APIs según `provider`. Se generalizaron además 3 textos que asumían
+    Anthropic a secas y quedaban confusos/incorrectos con Gemini activo:
+    el nombre del motor "Claude API (Nube)" -> "Nube (API externa)", y
+    el selector de presupuesto y su tooltip, que se llamaban "Presupuesto
+    de Sonnet" (nombre del modelo de Claude) pese a gobernar el techo de
+    tokens de CUALQUIER proveedor activo -> "Presupuesto de Nube".
+
+    Elección de diseño (2 opciones ofrecidas al usuario: selector manual
+    vs. fallback automático al agotarse el crédito de Claude): se eligió
+    selector MANUAL por ser más simple y no depender de parsear mensajes
+    de error de cuota, que Anthropic no documenta con un código estable.
+    El usuario todavía no tenía la API key de Gemini a mano al pedir
+    esto, así que el modelo default queda en `GEMINI_DEFAULT_MODEL`
+    ("gemini-2.5-flash") pendiente de que el usuario decida cuál usar
+    una vez tenga la key.
+
+    `ast.parse` OK en los dos archivos, en el sandbox y con el Python
+    del propio dispositivo (3.10.12), en las dos carpetas. `pyflakes`
+    corrido sobre los dos archivos completos -- ningún warning nuevo
+    introducido por este patch (los pocos que arroja son preexistentes,
+    en líneas sin relación). Backups `orchestrator.py.bak81_pre_patch96`
+    (1087219 bytes) y `sovnode_qt.py.bak14_pre_patch_qt66` (359734
+    bytes) creados antes de comitear. Commit al dispositivo exitoso al
+    primer intento en `MonolitoPersonal` (orchestrator.py
+    1087219→1109573 bytes; sovnode_qt.py 359734→373123 bytes) y
+    sincronizado también a `MonolitoPersonal-GitHub` (mismos bytes en
+    las dos carpetas, verificado). Pendiente, todo del lado del usuario:
+    conseguir una API key de Gemini (Google AI Studio,
+    aistudio.google.com), elegir el modelo Gemini a usar (2.5-flash por
+    default, más barato y rápido; 2.5-pro para más calidad) y probar
+    "Probar conexión" con la UI real -- NINGUNA parte de este patch se
+    probó en vivo contra la Gemini API de verdad, solo se verificó
+    sintaxis/estructura, porque el usuario no tenía key al momento de
+    pedir esto.
+
+32. **`patch_orchestrator97` + `patch_qt67` (2026-09-19) — bug real,
+    MEDIDO por el usuario a los minutos de que patch_orchestrator96
+    quedara activo**: primera prueba en vivo real de Gemini ("Probar
+    conexión" con una key recién cargada) devolvió `❌ Falló la
+    conexión: This model models/gemini-2.5-flash is no longer available
+    to new users. Please update your code to use models/gemini-3.6-
+    flash for the latest features and improvements.` -- error real de
+    la propia API de Google, visto en la consola de la app (screenshot
+    del usuario). `gemini-2.5-flash` -- el `GEMINI_DEFAULT_MODEL` elegido
+    en el patch anterior -- ya no está disponible para cuentas nuevas de
+    Gemini; el catálogo de modelos de Google cambia mucho más rápido que
+    el de Anthropic (confirmado además por búsqueda web: ya existe toda
+    una familia Gemini 3.x -- 3.5/3.6/3.7/3.8 Flash, 3.1 Pro -- que ni
+    siquiera existía al momento de escribir patch_orchestrator96 horas
+    antes).
+
+    Fix inmediato: `GEMINI_DEFAULT_MODEL` actualizado a `gemini-3.6-flash`
+    (el reemplazo que la propia API sugirió en el mensaje de error), con
+    su precio real agregado a `GEMINI_PRICING_USD_PER_MTOK` --
+    $0.75/$3.75 por MTok in/out, verificado en ai.google.dev/gemini-api/
+    docs/pricing el día de este patch -- precio PROMOCIONAL vigente
+    hasta 2026-12-31, sube a $1.50/$7.50 desde 2027-01-01 (revisar esa
+    fecha si este patch sigue vigente para entonces). Se mantienen
+    `gemini-2.5-flash`/`gemini-2.5-pro` en la tabla de precios por si
+    una cuenta VIEJA con acceso previo todavía puede usarlos (el error
+    dice "no longer available to NEW users", no "no longer exists" a
+    secas) -- solo se cambió cuál es el DEFAULT.
+
+    Fix estructural (el más importante de los dos, pensado para que este
+    mismo bug no vuelva a pasar la próxima vez que Google jubile un
+    modelo): nuevo campo "Modelo" editable a mano en el panel de Nube
+    (`cloud_model_input`, sovnode_qt.py) -- hasta este patch el
+    `model_id` de cada proveedor NO tenía ningún control de UI, vivía
+    fijo en código (`CLOUD_DEFAULT_MODEL`/`GEMINI_DEFAULT_MODEL`) salvo
+    que alguien lo cambiara a mano en el Registro de Windows. Ahora el
+    usuario puede pegar el ID que la propia API le sugiera en un mensaje
+    de error como este y seguir andando sin esperar un patch de código.
+    Se guarda por proveedor (`cloud/model_id_anthropic`/`cloud/model_id_
+    gemini`, mismo criterio que la API key desde patch_qt66), con
+    compatibilidad hacia atrás escribiendo también la clave legacy
+    `cloud/model_id` cuando el proveedor activo es Anthropic. Campo
+    vacío cae al default de fábrica del proveedor activo en vez de
+    mandarle a la API un `model_id` vacío (`_on_cloud_model_edited`).
+
+    `ast.parse` OK en los dos archivos, en el sandbox y con el Python
+    del propio dispositivo, en las dos carpetas. `pyflakes` sin
+    warnings nuevos. Backups `orchestrator.py.bak82_pre_patch97`
+    (1109573 bytes) y `sovnode_qt.py.bak15_pre_patch_qt67` (373123
+    bytes). Commit al dispositivo exitoso al primer intento en
+    `MonolitoPersonal` (orchestrator.py 1109573→1111004 bytes;
+    sovnode_qt.py 373123→378273 bytes) y sincronizado también a
+    `MonolitoPersonal-GitHub` (mismos bytes verificados en las dos
+    carpetas). Pendiente: que el usuario reintente "Probar conexión"
+    con `gemini-3.6-flash` ya cargado por default (no debería necesitar
+    tocar nada, el campo ya lo va a mostrar) y confirme si esta vez
+    conecta -- si Google vuelve a cambiar el nombre del modelo antes de
+    ese retest, el campo "Modelo" nuevo le permite al usuario mismo
+    pegar el ID correcto sin depender de otro patch.
+
+33. **`patch_orchestrator98` + `patch_qt68` + `patch_qt69` (2026-09-19) —
+    3 bugs/pedidos reales, todos reportados por el usuario en la MISMA
+    sesión de prueba en vivo de Gemini que confirmó que patch_
+    orchestrator97 sí conectó** ("Turno completado exitosamente usando
+    el modelo: gemini-3.6-flash", log real).
+
+    **(a) `patch_orchestrator98` -- código incompleto al "mejorar"
+    minesweeper.py, bug real MEDIDO**: con las herramientas de workspace
+    desactivadas, el turno "mejora ese codigo" devolvió el código
+    completo como texto plano en el chat (no vía `edit_file`, `0
+    tool_call(s)` en el log), pero el bloque terminaba cortado a mitad
+    de una expresión booleana (`... or` seguido de nada) -- inválido
+    como Python -- y la consola igual mostró "✓ sin problemas". 677
+    tokens de salida sobre un techo de 2400 descarta que fuera un corte
+    por presupuesto (ese caso ya estaba cubierto desde patch95/96). Causa
+    raíz: `_call_gemini_api_raw`/`_stream_gemini_api_raw` solo marcaban
+    `done_reason="length"` (la señal que el pipeline usa para
+    rescatar/continuar una respuesta cortada, ver `_looks_truncated` y
+    la rama de continuación de `run_turn` para `FAST_PATH`) cuando
+    `finishReason == "MAX_TOKENS"` -- cualquier OTRO finishReason que no
+    fuera "STOP" (p. ej. "SAFETY", "RECITATION" -- un chequeo de límites
+    de tablero como el que se cortó es exactamente el tipo de código
+    genérico/muy común que suele disparar el filtro de recitación de
+    Google --, "PROHIBITED_CONTENT", "BLOCKLIST",
+    "MALFORMED_FUNCTION_CALL", "OTHER") caía al default "stop", como si
+    la generación hubiera terminado bien. Fix: cualquier finishReason
+    que no sea "STOP" (o vacío) se trata como corte -- reusa a propósito
+    el mismo `done_reason="length"` que ya dispara el rescate/
+    continuación existente (más seguro que inventar un 4to valor que
+    ningún call-site interpretaría) y, además, loguea una advertencia
+    explícita con el finishReason real visto, para que quede claro en
+    consola que no fue un corte por presupuesto. Elección deliberada:
+    seguir pidiendo más tokens no ayuda si el corte fue por un filtro de
+    contenido, pero el rescate LOCAL (Ollama, sin costo) no pasa por los
+    filtros de Gemini y sí puede terminar el código -- mejor eso que un
+    fragmento incompleto marcado como éxito.
+
+    **(b) `patch_qt68` -- el watcher de Workspace seguía leyendo disco
+    con las herramientas desactivadas, bug real MEDIDO**: el usuario
+    apagó "Habilitar herramientas de archivo" (log: "Herramientas de
+    workspace DESACTIVADAS: todo pedido de código se responde directo en
+    el chat, sin tocar el disco") pero un turno posterior igual mostró
+    "📚 [Workspace] 'minesweeper.py' reindexado: 4 fragmento(s)" -- el
+    `WorkspaceWatcherWorker` (escaneo en segundo plano para RAG/búsqueda
+    semántica) seguía corriendo. Causa raíz: desde el BLINDAJE de
+    2026-09-02 ("DOS conceptos de workspace totalmente desconectados
+    entre sí"), el toggle "Habilitar herramientas de archivo" SOLO
+    controlaba si el modelo podía usar `read_file`/`write_file`/
+    `edit_file`/`list_dir` vía tool-calling -- el watcher de RAG era
+    independiente A PROPÓSITO (por diseño original), pero eso contradice
+    directamente el propio tooltip del control ("sin tocar el disco").
+    Fix: el toggle ahora también arranca/para el hilo del watcher
+    (`_on_workspace_tools_toggled`) -- apagarlo detiene CUALQUIER lectura
+    de disco del lado de Workspaces, no solo la escritura vía
+    tool-calling; volver a prenderlo retoma el escaneo de las carpetas ya
+    agregadas sin tener que sacarlas y re-agregarlas. También se corrigió
+    el arranque al iniciar la app (`_load_persisted_workspaces`, que
+    corre ANTES de que se cargue el valor persistido del toggle -- ahora
+    lee `QSettings` directo en vez de confiar en el atributo todavía no
+    inicializado) y al agregar una carpeta nueva
+    (`_on_add_workspace_clicked`, ahora sujeto al mismo gate). `add_root`
+    en sí sigue siendo seguro llamarlo con el toggle apagado -- solo
+    registra la ruta en memoria, el I/O real vive en `scan_once()` del
+    hilo, que es lo que queda parado.
+
+    **(c) `patch_qt69` -- panel "Motor de Generación" apretado, pedido
+    explícito del usuario: "mejora las dimensiones de los cuadros en la
+    interfaz para que no se aplasten entre si"**: esta tarjeta pasó de 6
+    widgets (antes de patch_qt66/67) a 13 sin ajustar el espaciado --
+    todo se veía como un bloque apretado. Fix visual únicamente:
+    `ec_layout.setSpacing` subido de 6 a 9px, más `addSpacing(8)` extra
+    antes de cada widget que arranca un subgrupo lógico nuevo (proveedor+
+    modelo / credenciales / presupuesto) -- separa los subgrupos entre sí
+    sin tocar el tamaño de cada control individual (ya definido en el QSS
+    de QComboBox/QLineEdit) ni la lógica de ningún handler.
+
+    `ast.parse` OK en los dos archivos, sandbox + dispositivo, las dos
+    carpetas. `pyflakes` sin warnings nuevos. Backups
+    `orchestrator.py.bak83_pre_patch98` (1111004 bytes) y
+    `sovnode_qt.py.bak16_pre_patch_qt68_69` (378273 bytes). Commit al
+    dispositivo exitoso al primer intento en `MonolitoPersonal`
+    (orchestrator.py 1111004→1115652 bytes; sovnode_qt.py
+    378273→383219 bytes) y sincronizado también a
+    `MonolitoPersonal-GitHub` (mismos bytes verificados en las dos
+    carpetas). Pendiente de retest en vivo: (a) repetir "mejora ese
+    codigo" sobre minesweeper.py con Gemini y confirmar que esta vez, si
+    Gemini corta la respuesta, el pipeline la completa en vez de
+    devolverla trunca -- revisar la consola por el nuevo mensaje de
+    advertencia "Gemini cortó la respuesta antes de tiempo
+    (finishReason=...)" si vuelve a pasar; (b) apagar/prender
+    "Habilitar herramientas de archivo" y confirmar en consola que
+    "reindexado" deja de aparecer con el toggle apagado; (c) revisar
+    visualmente el panel "Motor de Generación" con Gemini seleccionado
+    (el caso con más widgets visibles a la vez).
+
+34. **`patch_qt70` (2026-09-19) — bug real, MEDIDO por screenshot del
+    usuario ("mejora esta parte de la interfaz para que todo sea
+    distinguible"): el panel "Motor de Generación" se veía con varias
+    filas como cajas prácticamente VACÍAS ("Probar conexión", "Olvidar
+    key guardada" sin texto legible)**. Causa raíz encontrada al revisar
+    el QSS: `QPushButton#secondaryButton` tenía como color de texto POR
+    DEFECTO `theme["secondary"]` -- el mismo gris apagado pensado para
+    etiquetas secundarias (`sectionTitle`), NO para el label principal
+    de un botón interactivo -- sobre el fondo `theme["card"]` (p. ej.
+    `#8B92A5` sobre `#171B24` en el tema oscuro default) el contraste es
+    bajo, y a la fuente chica que ya tenía el botón (12px) en una
+    pantalla de alta densidad el texto quedaba prácticamente invisible
+    hasta pasar el mouse por encima (`:hover` sí lo subía a
+    `theme["text"]`, pero eso no ayuda si el usuario nunca hizo hover).
+    Este bug afecta a TODOS los `secondaryButton` de la app (Probar
+    conexión, Olvidar key guardada, Descargar modelo, Añadir/Quitar
+    carpeta, Exportar chat, Exportar dataset, engranaje de Ajustes,
+    adjuntar, micrófono, TTS) -- existía desde antes de esta sesión, solo
+    se hizo evidente ahora porque el panel de Motor tiene dos
+    `secondaryButton` seguidos en un espacio ya apretado por los
+    controles de Gemini.
+
+    Fix: color de texto por defecto de `secondaryButton` sube a
+    `theme["text"]` (el mismo que ya usaba `:hover`) -- el hover sigue
+    aportando el resaltado de borde en `theme["accent"]`, pero deja de
+    ser la ÚNICA forma de leer qué dice el botón. Mejoras acompañantes,
+    mismo patch: sidebar subido de 280 a 300px de ancho (más aire para
+    los textos más largos que trajo Gemini: "Gemini (Google)",
+    "gemini-3.6-flash", "Probar conexión") y `QComboBox` con `font-size`
+    de 11 a 12px + padding de 6 a 7px (mismo criterio de legibilidad).
+    Ningún otro archivo de estilo (`QLineEdit`, que ya no tenía
+    `font-size` explícito y hereda el default del SO, similar a los
+    12px nuevos de QComboBox) se tocó.
+
+    `ast.parse` OK en el sandbox y con el Python del propio dispositivo.
+    `pyflakes` sin warnings nuevos. Backup
+    `sovnode_qt.py.bak17_pre_patch_qt70` (383219 bytes). Commit al
+    dispositivo exitoso al primer intento (383219→385373 bytes),
+    verificado byte a byte. **A partir de este patch se deja de
+    sincronizar cada cambio también a `MonolitoPersonal-GitHub`** --
+    pedido explícito del usuario ("no necesito que lo hagas tambien en
+    el monolitopersonal github, ya que lo puedo reemplazar con un click
+    con el bat"): esa carpeta es un EXPORT desechable que el usuario
+    regenera con `Crear carpeta limpia para GitHub.bat` cuando quiere
+    subir al repo, no una segunda copia de trabajo -- responde
+    definitivamente la pregunta que había quedado abierta desde el ítem
+    29 sobre cuál carpeta es la canónica: `MonolitoPersonal`, sin
+    ambigüedad. Los ítems 31 a 34 fueron los últimos en sincronizarse a
+    las dos carpetas; de acá en adelante, salvo pedido explícito en
+    contrario, los patches de esta sesión solo tocan `MonolitoPersonal`.
+    Pendiente de retest visual en vivo: confirmar que "Probar conexión"/
+    "Olvidar key guardada" y el resto de los botones secundarios ya se
+    leen sin necesidad de pasar el mouse por encima.
+
+35. **`patch_qt71` (2026-09-19) — bug real, GRAVE, autoinducido por
+    `patch_qt70` en el mismo día: MEDIDO por screenshot del usuario
+    mostrando TODA la interfaz caída al estilo nativo de Windows sin
+    tema oscuro** ("arregla la interfaz ahora, a el estilo que tenia
+    antes"). Causa raíz: el comentario BLINDAJE que documentaba el fix
+    de contraste de `patch_qt70` se escribió con sintaxis Python de
+    comentario de línea (`#`) pero se pegó DENTRO del string que arma
+    `build_style(theme, font_family)` -- un `return f"""..."""` que
+    abarca ~lines 2040-2732 y que Qt interpreta como QSS (CSS), no como
+    Python. QSS/CSS solo soporta comentarios de bloque `/* ... */`; un
+    `#` ahí no es un comentario para nada, es texto literal que se
+    inyecta en la hoja de estilos. Eso corrompió el parseo de QSS desde
+    ese punto en adelante -- sin ninguna excepción, porque el error
+    ocurre en el parser C++ de Qt, no en Python -- y los widgets
+    afectados (`QComboBox`, `QListWidget#workspacesList`, y la propia
+    regla `QPushButton#secondaryButton` que el comentario precedía)
+    perdieron todo su estilo y cayeron al render nativo del SO. Es
+    decir: el fix de legibilidad de `patch_qt70` sí quedó bien escrito,
+    pero el comentario que lo explicaba rompió la hoja de estilos
+    completa a partir de ahí.
+
+    Fix: el bloque de comentario se reescribió en sintaxis `/* ... */`
+    válida para QSS, documentando adentro el mismo bug (para que quede
+    como advertencia permanente en el propio lugar del riesgo: "todo
+    comentario BLINDAJE agregado dentro de este f-string tiene que usar
+    `/* */`, nunca `#`"). Nota para quien edite este archivo después: el
+    primer intento de este mismo fix falló por escribir en la prosa del
+    comentario nuevo la secuencia literal de comillas triples que abre
+    el f-string de Python -- eso rompió el f-string EXTERIOR (el de
+    Python, no el de QSS) y `ast.parse` tiró `SyntaxError: unmatched
+    ')'`. Se corrigió describiendo esa sintaxis en palabras ("el return
+    de build_style, cerca de la línea 2040") en vez de citarla
+    literalmente.
+
+    Verificado en el sandbox: `ast.parse` → `SYNTAX_OK`, `pyflakes` sin
+    warnings nuevos (solo el ya preexistente de `_CancelToken` en la
+    línea ~3709), y barrido manual con `grep`/`awk` de las líneas
+    2040-2732 completas (los límites reales del f-string, confirmados
+    con `awk`) sin encontrar ningún otro `#` suelto dentro del bloque.
+    Backup `sovnode_qt.py.bak18_pre_patch_qt71` (385373 bytes, el
+    tamaño exacto de `patch_qt70`, confirmado antes de tocar nada).
+    Commit al dispositivo exitoso al primer intento (385373→387047
+    bytes), verificado byte a byte y con `ast.parse` del propio Python
+    del dispositivo. Solo a `MonolitoPersonal`, como desde el ítem 34.
+    Pendiente de retest visual en vivo: confirmar que el tema oscuro
+    completo volvió (no solo el panel de Motor de Generación, sino
+    combos y la lista de carpetas de workspace, que también habían
+    perdido su estilo).
+
+    **Lección para el resto de la sesión y las que sigan**: cualquier
+    comentario nuevo que se agregue dentro del `return f"""..."""` de
+    `build_style()` (líneas ~2040-2732) tiene que usar `/* */`, nunca
+    `#` -- ese f-string es QSS, no Python, aunque esté escrito adentro
+    de una función Python. Vale la pena, antes de dar por cerrado
+    cualquier futuro patch que toque esa función, correr el mismo
+    barrido (`awk` para ubicar el rango exacto del f-string + `grep`
+    para confirmar que no quedó ningún `#` de línea completa suelto
+    adentro) como paso de verificación estándar, no solo `ast.parse`
+    (que valida Python, no QSS, y por eso no detectó el bug original de
+    `patch_qt70` -- el archivo era Python sintácticamente válido todo el
+    tiempo).
+
+36. **`patch_qt72` (2026-09-19) — bug real, MEDIDO por screenshot del
+    usuario: dentro del panel "Motor de Generación", texto de filas
+    distintas (la etiqueta "Modelo:", el campo de key enmascarado, el
+    label de presupuesto y el de uso) se veía amontonado/pisándose
+    entre sí** ("mejora esta parte de la interfaz para que todo sea
+    distinguible" seguido, tras la confirmación de que el tema oscuro
+    ya había vuelto con `patch_qt71`, de "ajusta el cuadro para que
+    tenga una escala mínima donde se pueda ver, todo bien organizado,
+    sin tocar el diseño -- el diseño déjalo tal cual como está").
+    Causa raíz: el `QFrame sidebar` (que contiene las 3 secciones
+    plegables -- Apariencia, Motor, Workspace -- con `engine_card`
+    creciendo de 6 a 13 widgets entre `patch_qt66` y `patch_qt67`, ver
+    ítems 31-32) se agregaba DIRECTO a `main_layout` sin ningún
+    `QScrollArea` de por medio. La ventana respeta una altura MÍNIMA
+    de 700px (`self.setMinimumSize(1024, 700)`) más lo que haya
+    quedado persistido en `QSettings("SovNode","SovNode").value(
+    "window/geometry")` de una sesión anterior a que existieran los
+    campos de Gemini -- si esa altura no alcanza para el contenido
+    natural del sidebar (que ya no entra en 700px con todo lo que se
+    le agregó esta sesión), Qt no tiene forma de avisar salvo
+    comprimir filas, lo que en la práctica se ve como texto de filas
+    distintas invadiendo el espacio de la fila vecina.
+
+    Fix, deliberadamente SOLO estructural (pedido explícito del
+    usuario de no tocar el diseño): el `sidebar` ahora se envuelve en
+    un `QScrollArea#sidebarScroll` nuevo, con `setWidgetResizable(
+    True)` (el sidebar sigue midiendo 300px de ancho, pero ese ancho
+    fijo ahora lo impone el `QScrollArea` en vez del `QFrame` de
+    adentro -- mismo ancho final, un contenedor distinto lo aplica),
+    scroll horizontal apagado y scroll vertical "según haga falta". El
+    QSS de `QFrame#sidebar` no cambió ni un color/fuente/padding --
+    solo se le movió el borde derecho de 1px al `QScrollArea` nuevo
+    (para que siga dibujándose en el mismo lugar de siempre) y se le
+    agregaron reglas de fondo a `QScrollArea#sidebarScroll` y su
+    viewport interno para que no se asome el blanco nativo de Qt
+    alrededor/detrás del sidebar (mismo motivo que ya tenía
+    `QListWidget#workspacesList` con su propia regla, ítem previo).
+    `self.config_panel` (la referencia que usa el botón de engranaje
+    para mostrar/ocultar el panel) pasa a apuntar al `QScrollArea`
+    nuevo en vez de al `QFrame` de adentro, para que ese toggle siga
+    funcionando exactamente igual. Con esto, cada control del sidebar
+    SIEMPRE se dibuja a su tamaño natural (el que ya definía el QSS
+    existente) -- si no entra todo en la altura visible de la
+    ventana, aparece una barra de scroll vertical en vez de
+    amontonar/pisar texto entre filas.
+
+    Verificado en el sandbox: `ast.parse` → `SYNTAX_OK`, `pyflakes`
+    sin warnings nuevos (mismo único warning preexistente de
+    `_CancelToken`), y un chequeo extra de balance de llaves sobre el
+    template QSS completo de `build_style()` (sustituyendo `{{`/`}}`
+    y las interpolaciones `{theme[...]}` por marcadores, para no
+    reconstruir accidentalmente el mismo tipo de bug de `patch_qt71`)
+    dio 90 llaves abiertas contra 90 cerradas. Backup
+    `sovnode_qt.py.bak19_pre_patch_qt72` (387047 bytes, el tamaño
+    exacto de `patch_qt71`, confirmado antes de tocar nada). Commit al
+    dispositivo exitoso al primer intento (387047→390628 bytes),
+    verificado byte a byte y con `ast.parse` del propio Python del
+    dispositivo. Solo a `MonolitoPersonal`, como desde el ítem 34.
+    Pendiente de retest visual en vivo: confirmar que el panel "Motor
+    de Generación" ya se lee fila por fila sin superposición, con o
+    sin necesidad de hacer scroll según la altura de la ventana del
+    usuario.
+
+37. **`patch_orchestrator99` (2026-09-19) — bug real, MEDIDO en vivo por
+    el usuario: el saludo generado por Gemini se mostraba como
+    "Â¡Hola! Â¿En quÃ© te puedo ayudar hoy?" en vez de "¡Hola! ¿En qué
+    te puedo ayudar hoy?"** (pregunta del usuario, sin saber todavía
+    que era un bug reproducible: "que opinas de como rinde? porque
+    aveces comete errores al generar texto?"). Causa raíz: la API de
+    Gemini en modo streaming (`:streamGenerateContent?alt=sse`, el
+    camino real de cualquier turno normal) manda el header
+    `Content-Type: text/event-stream` SIN `charset` explícito.
+    `requests` adivina la codificación de la respuesta a partir de ese
+    header (`get_encoding_from_headers`), y cualquier content-type que
+    contenga la palabra "text" sin `charset` cae en su default
+    histórico de ISO-8859-1 (heredado del RFC 2616, pensado para
+    HTML/texto plano viejo, no para SSE moderno que en la práctica
+    siempre es UTF-8). Con `resp.encoding` mal seteado a ISO-8859-1,
+    `resp.iter_lines(decode_unicode=True)` (en `_stream_gemini_api_
+    raw`) decodifica cada línea del SSE con ese codec incorrecto: cada
+    caracter UTF-8 de 2 bytes (tildes, ñ, ¡, ¿) se separa en DOS
+    caracteres Latin-1 distintos (p. ej. los bytes UTF-8 de "é" se leen
+    como "Ã©") -- el string Python resultante queda con la corrupción
+    ya "cocinada" adentro, no es un problema de fuente/rendering de la
+    UI (que solo muestra fielmente el string ya roto que le llega).
+    Confirma además la respuesta a la pregunta más amplia del usuario:
+    esto NO es el modelo "cometiendo errores al generar texto" -- es
+    un bug de transporte/decodificación puramente nuestro, nada tiene
+    que ver con la calidad de Gemini.
+
+    Fix: `resp.encoding = "utf-8"` fijado a mano justo después de
+    abrir la respuesta streameada, ANTES de iterar líneas -- se ignora
+    lo que `requests` haya adivinado del header. Aplicado en
+    `_stream_gemini_api_raw` (donde se confirmó el bug) Y en
+    `_stream_claude_api_raw` (mismo patrón exacto de
+    `resp.iter_lines(decode_unicode=True)`, aunque no se confirmó el
+    bug en vivo con Anthropic esta sesión -- puede que su API sí mande
+    `charset=utf-8` explícito y por eso no se vio, pero corregirlo ahí
+    también es gratis y evita que aparezca el mismo bug si Anthropic
+    cambia ese header en el futuro). La variante NO-streaming
+    (`_call_gemini_api_raw`) NO tenía este problema: usa `resp.json()`,
+    y `requests` sí trata `application/json` como UTF-8 por default
+    (caso especial en `get_encoding_from_headers`), a diferencia de
+    `text/event-stream`. El streaming de Ollama local
+    (`_stream_llm_raw`, más abajo en el archivo, mismo patrón de
+    `iter_lines`) tampoco está afectado, por una razón distinta: su
+    `Content-Type` es `application/x-ndjson`, que no matchea ni la
+    rama "text" ni la rama "application/json" de `get_encoding_from_
+    headers`, así que `resp.encoding` queda en `None` y `requests`
+    directamente NO decodifica (devuelve bytes crudos), que
+    `json.loads()` interpreta como UTF-8 por su cuenta (comportamiento
+    por defecto del propio `json` de Python) -- correcto por
+    casualidad, no se tocó.
+
+    Nota para quien continúe: las conversaciones que ya se guardaron
+    con este bug activo (turnos anteriores en el WAL/historial de chat
+    de esta sesión) van a seguir mostrando el texto mojibake tal cual
+    quedó guardado -- este fix solo previene la corrupción hacia
+    adelante, no repara turnos ya persistidos. Si el usuario reporta
+    ver el mismo patrón "Â¡"/"Ã©" en mensajes VIEJOS después de este
+    patch, es esperado y no un fix incompleto.
+
+    Verificado en el sandbox: `ast.parse` → `SYNTAX_OK`, `pyflakes` sin
+    warnings nuevos (los 6 preexistentes -- import sin usar de
+    `rag_faiss.chunk_document`, redefinición de `requests`, dos
+    f-strings sin placeholders, `Skeleton` no definido, y
+    `wants_file_tools` sin usar -- ninguno cerca de las líneas
+    tocadas). Backup `orchestrator.py.bak84_pre_patch99` (1115652
+    bytes, el tamaño exacto de `patch_orchestrator98`, confirmado
+    antes de tocar nada). Commit al dispositivo exitoso al primer
+    intento (1115652→1119265 bytes), verificado byte a byte y con
+    `ast.parse` del propio Python del dispositivo. Solo a
+    `MonolitoPersonal`, como desde el ítem 34.
+
+38. **`patch_orchestrator100` (2026-09-19) — bug real, MEDIDO en vivo:
+    turno "añade cosas al codigo y explica que añadiste" (Gemini, sobre
+    `minesweeper.py`) terminó en "He añadido las siguientes
+    funcionalidades" y nada más -- la pasada de cierre gastó apenas 5
+    tokens de salida en total.** El usuario lo reportó sin saber
+    todavía que era reproducible ("no explico lo que metio, creo que
+    porque se corto"). Diagnóstico: NO es el bug de truncamiento de
+    `patch_orchestrator98` (ítem 33) -- el `finishReason` de esa pasada
+    fue `STOP` genuino, no `MAX_TOKENS` ni ningún otro corte, así que
+    el mecanismo de rescate de ese patch nunca tenía por qué
+    activarse. Tampoco es el bug de ruteo de `patch_orchestrator89`
+    (mencionado en un BLINDAJE ya existente en el código, junto a
+    `_NON_FILE_TOPIC_RE`) -- el archivo se identificó y editó
+    correctamente (2981→4554 bytes, 5 ediciones aplicadas). La causa
+    real: `_zero_chatter` (§5.6, dentro del bucle de tool-calling de
+    `run_turn`) le pide SIEMPRE al modelo "confirmación breve de 1-2
+    frases" tras una herramienta exitosa, sin importar si el usuario
+    pidió explícitamente una explicación en SU PROPIO mensaje de ese
+    turno -- con "...y explica que añadiste" en el pedido original, el
+    modelo recibió dos señales contradictorias (el pedido del usuario
+    pidiendo detalle, la instrucción de cierre pidiendo brevedad) y
+    resolvió el conflicto escribiendo solo la frase introductoria de
+    una lista que nunca llegó a enumerar, dentro del presupuesto de
+    "sé breve" que le impusimos nosotros. Confirma, de paso, la
+    pregunta más amplia que el usuario había hecho un turno antes:
+    esto tampoco es el modelo "cometiendo errores al generar texto" --
+    es un conflicto de instrucciones de nuestro propio prompt de
+    cierre.
+
+    Fix: nuevo regex `_EXPLICIT_EXPLANATION_REQUEST_RE` (verbos/frases
+    de pedido explícito de explicación -- "explica"/"detalla"/
+    "describe"/"cuéntame"/"dime qué hiciste" en español, "explain"/
+    "detail"/"tell me what"/"what you did" en inglés). Si el
+    `user_input` de este turno matchea, `_zero_chatter` deja de pedir
+    brevedad para esa pasada de cierre y en cambio pide explícitamente
+    el detalle real (sin volver a pegar el código completo del archivo
+    como "explicación", mismo criterio que ya usa el resto del
+    prompt). Sin ese pedido explícito, comportamiento IDÉNTICO al de
+    antes -- la brevedad de Zero-Chatter sigue siendo el default para
+    "mejora X"/"arregla Y" sin pedido de explicación adicional.
+    Deliberadamente un regex NUEVO y no una reutilización de
+    `_NON_FILE_TOPIC_RE` (que también contiene una forma de
+    "explicación"): ese otro regex decide si un turno con verbo de
+    "modificar" es en realidad sobre un archivo o no, y ya tuvo un
+    bug real (`patch_orchestrator89`, ítem previo en este mismo
+    archivo) por capturar el verbo suelto "explica" con demasiada
+    amplitud para ESE uso -- acá el uso es distinto (solo decide si
+    pedir brevedad o no) y no hereda ese riesgo, así que capturar el
+    verbo suelto es intencional y correcto para este caso.
+
+    Verificado en el sandbox: `ast.parse` → `SYNTAX_OK`, `pyflakes`
+    sin warnings nuevos (mismos 6 preexistentes), y un script standalone
+    contra el regex nuevo con la frase real del usuario ("añade cosas
+    al codigo y explica que añadiste", matchea) más 3 variantes
+    positivas en inglés/español y 4 negativos de control ("mejora el
+    codigo...", "hola", "agrega un sistema de puntuacion", "hazlo mas
+    rapido") -- los 8 se comportaron como se esperaba, sin falsos
+    positivos nuevos. Backup `orchestrator.py.bak85_pre_patch100`
+    (1119265 bytes, el tamaño exacto de `patch_orchestrator99`,
+    confirmado antes de tocar nada). Commit al dispositivo exitoso al
+    primer intento (1119265→1123349 bytes), verificado byte a byte y
+    con `ast.parse` del propio Python del dispositivo. Solo a
+    `MonolitoPersonal`, como desde el ítem 34. Pendiente de retest en
+    vivo: repetir un turno "mejora/agrega X y explica qué hiciste"
+    sobre Gemini y confirmar que la explicación final ya no se corta
+    en la frase introductoria.
+
+39. **`patch_orchestrator101` (2026-09-19) — recalibración del piso
+    mínimo de la categoría "juego" (§5.5, negociador de alcance),
+    pedida explícitamente por el usuario tras preguntar "porque aun
+    tenemos errores con el crear un archivo, cuantos tokens minimo
+    necesita para crearlo por su cuenta y que el bot local no se
+    demore unos 50 segundos"**. Diagnóstico, con datos de la propia
+    sesión: con Gemini y Presupuesto "Bajo", el techo real que calcula
+    `_cloud_output_ceiling_tokens_for_cents` es ~2400 tokens (a partir
+    del precio de salida de `gemini-3.6-flash`, $3.75/MTok). El piso
+    mínimo de "juego" estaba en 1300 (recalibrado la vez anterior en
+    `patch_orchestrator80`, ítem histórico ya documentado) -- 2400>1300
+    dejaba pasar el turno como "factible", pero en la práctica NINGUNO
+    de los dos turnos reales de esta sesión que matchearon esa
+    categoría (`dame un codigo de buscaminas`, `Create an space
+    invaders game in the workspace`) completó dentro de ese techo:
+    ambos dispararon el file-op guard ("write_file... hit Sonnet's
+    per-turn budget") y cayeron al rescate local (Ollama, ~50s+
+    medidos), y el segundo terminó en un archivo de 153 bytes --
+    prácticamente vacío. El piso de 1300 seguía siendo un gate de
+    factibilidad razonable (evita pagar por algo condenado a fallar
+    con $0 de presupuesto), pero nunca fue diseñado para garantizar
+    que el pedido complete SIN el rescate local -- son dos preguntas
+    distintas, y el usuario preguntó por la segunda.
+
+    Opciones presentadas al usuario (`AskUserQuestion`): subir el piso
+    en el código para que "Bajo" eleve automáticamente a un tier
+    mayor en pedidos de juego, dejarlo como está y elegir manualmente
+    "Medio"/"Alto" desde la UI, o medir más turnos antes de decidir.
+    Eligió la primera. Fix: piso de "juego" subido de 1300 a 3000
+    (`_MIN_VIABLE_FLOOR_PATTERNS`, `_MIN_VIABLE_FLOOR_CATEGORY_LABELS`
+    actualizado en lockstep para que la telemetría del WAL siga
+    etiquetando "juego" en vez de mostrar "3000"), y
+    `_MIN_VIABLE_FLOOR_UNRECOGNIZED_NAME` (pisos de nombres de
+    juego/app no reconocidos, "isaac"/"mario") subido igual, de 1300 a
+    3000, porque siempre se pensó en el mismo orden de magnitud que
+    "juego" (ver su propio comentario ya existente). Con esto, el
+    mecanismo de elevación automática YA EXISTENTE
+    (`_elevate_codegen_ceiling_if_needed`, de `patch_orchestrator82`/
+    `83`, sin cambios de lógica) entra en juego para CUALQUIER pedido
+    de juego en "Bajo": con Gemini eleva de "Bajo" a "Medio" (techo
+    real final 6384tok, confirmado con una simulación standalone antes
+    de tocar el archivo real). Nota importante para quien continúe:
+    con Claude (`claude-sonnet-5`, ~2.7x más caro por token que
+    Gemini), el MISMO piso de 3000 no alcanza con el rango de "Medio"
+    de Claude y termina elevando hasta "Alto" (techo final 4788tok) en
+    vez de "Medio" -- consecuencia matemática esperada de un piso en
+    TOKENS compartido entre proveedores con precio por token distinto
+    (la cantidad de tokens que necesita un juego real no depende del
+    proveedor, pero cuántos centavos cuestan esos tokens sí), NO un
+    bug. Sin medición en vivo de un turno de juego con Claude en
+    "Bajo" todavía esta sesión -- si en la práctica ese salto a "Alto"
+    resulta excesivo, recalibrar por separado en vez de bajar el
+    número medido para Gemini.
+
+    Verificado en el sandbox: `ast.parse` → `SYNTAX_OK`, `pyflakes` sin
+    warnings nuevos (mismos 6 preexistentes), y una simulación
+    standalone de `_elevate_codegen_ceiling_if_needed` (reimplementada
+    en un script aparte con la misma fórmula, NO importando el
+    archivo real) confirmando los rangos exactos de los 4 niveles para
+    ambos proveedores y el resultado de la elevación con el piso
+    nuevo (3000) antes de aplicar el cambio real. Backup
+    `orchestrator.py.bak86_pre_patch101` (1123349 bytes, el tamaño
+    exacto de `patch_orchestrator100`, confirmado antes de tocar
+    nada). Commit al dispositivo exitoso al primer intento
+    (1123349→1126540 bytes), verificado byte a byte y con `ast.parse`
+    del propio Python del dispositivo. Solo a `MonolitoPersonal`, como
+    desde el ítem 34. Pendiente de retest en vivo: repetir un pedido
+    de juego con Gemini y Presupuesto "Bajo" seleccionado y confirmar
+    en el log que ahora aparece "Presupuesto elevado... subiendo a
+    'Medio'" ANTES de la primera llamada a Cloud, en vez de intentar
+    con 2400tok y caer al rescate local después.
+
+40. **`patch_orchestrator102` (2026-09-19) — bug real, MEDIDO vía WAL Y
+    debug log en vivo (no solo por screenshot, esta vez con el archivo
+    de verdad en el dispositivo): turno "improve that code and tell me
+    what you implement" [turn_id ddbea5ae-aefa-4334-9e2e-113379df6938]
+    terminó en "Here are the improvements implemented in **`space",
+    cortado a mitad de una palabra.** El usuario preguntó
+    "identifica porque no explico lo que agrego en el ultimo mensjae".
+    A diferencia del ítem 38 (`patch_orchestrator100`, Zero-Chatter
+    sobre-aplicado), esta vez SÍ hubo un pedido explícito de
+    explicación en el turno ("tell me what you implement", matchea
+    `_EXPLICIT_EXPLANATION_REQUEST_RE` del ítem 38) -- ese fix ya
+    aplicó correctamente (la instrucción de cierre NO pedía brevedad
+    acá). El problema es distinto y más profundo: `sovnode_debug.log`
+    (`[EmptyResponseDiag]`) mostró `done_reason=length` para la pasada
+    de cierre -- confirmando que `patch_orchestrator98`/`99` (detección
+    correcta de truncamiento de Gemini) SÍ está funcionando -- pero
+    `raw_len=179` (no vacío), así que la garantía de "nunca vacío" de
+    `resolve_visible_answer` tampoco tenía motivo para intervenir (esa
+    red de seguridad es solo contra respuesta VACÍA). El texto
+    truncado se mostró tal cual.
+
+    Causa raíz estructural: el bloque de rescate de truncamiento que
+    YA EXISTE dentro del bucle de tool-calling (§5.5, desde
+    `patch_orchestrator49`/`60`) solo dispara cuando `next_tool_call`
+    es un `write_file`/`edit_file` real cortado a mitad de JSON -- pero
+    en la pasada de CIERRE (la que solo escribe la explicación en
+    prosa, después de que un archivo ya se escribió con éxito),
+    `next_tool_call` se fija a `None` A PROPÓSITO (`None if
+    is_last_allowed_pass else...`, para cortar el bucle de
+    herramientas) sin importar qué tan cortada haya quedado la prosa.
+    El `if` del rescate nunca podía ser verdadero para este caso --no
+    es específico de Gemini ni de este turno puntual, es un hueco
+    estructural que existía desde que se armó el bucle de cierre,
+    simplemente nunca se había medido un turno real que lo disparara
+    hasta ahora.
+
+    Fix: nuevo bloque, mismo criterio de "reintentar una sola vez con
+    más presupuesto" que ya usan los rescates de write_file/edit_file
+    de este mismo bucle -- si la pasada de cierre (sin tool call,
+    `is_last_allowed_pass=True`) termina con `done_reason=length`, se
+    reintenta UNA vez con el doble de `FOLLOWUP_DECISION_NUM_PREDICT`
+    (500 en vez de 250 -- sigue siendo chico frente al techo real de
+    codegen, esto es prosa de cierre, no código nuevo) y se usa ese
+    resultado si no vino vacío ni con un error explícito. Si el
+    reintento TAMBIÉN se corta, se deja igual (ya es lo mejor
+    conseguido con el doble de presupuesto) en vez de reintentar sin
+    límite -- mismo espíritu de "un solo reintento gratuito, nunca un
+    bucle sin fin" que ya usan todos los demás rescates del archivo.
+    Nuevo evento de WAL, `closing_explanation_truncated_retry`, para
+    poder medir con datos reales cuán seguido dispara este caso.
+
+    Nota para quien continúe: la causa técnica EXACTA de por qué
+    Gemini cortó a los ~9 tokens con `done_reason=length` (muy lejos
+    del techo de 250) sigue sin confirmarse -- podría ser un
+    `finishReason` real de `SAFETY`/`RECITATION` (el patch98 los trata
+    como truncamiento a propósito, ver ese ítem) disparado por algo
+    trivial en el texto a medio escribir, o una colisión con algún
+    `stopSequence`. No se investigó más a fondo porque el fix de
+    reintento resuelve el síntoma sin importar la causa exacta (mismo
+    criterio pragmático que ya usa el resto de esta sección de
+    rescates) -- si se repite seguido, vale la pena revisar el
+    `finishReason` crudo vía el nuevo evento de WAL.
+
+    Verificado en el sandbox: `ast.parse` → `SYNTAX_OK`, `pyflakes` sin
+    warnings nuevos (mismos 6 preexistentes). Backup
+    `orchestrator.py.bak87_pre_patch102` (1126540 bytes, el tamaño
+    exacto de `patch_orchestrator101`, confirmado antes de tocar
+    nada). Commit al dispositivo exitoso al primer intento
+    (1126540→1131619 bytes), verificado byte a byte y con `ast.parse`
+    del propio Python del dispositivo. Solo a `MonolitoPersonal`, como
+    desde el ítem 34. Pendiente de retest en vivo: repetir un turno de
+    edición con pedido explícito de explicación y confirmar que ya no
+    se corta a mitad de palabra (o, si se corta igual tras el
+    reintento, que al menos el WAL registre
+    `closing_explanation_truncated_retry` para poder investigar el
+    `finishReason` real la próxima vez).
+
+41. **`patch_orchestrator103` (2026-09-19) — pedido explícito del usuario,
+    tras medir en vivo que el propio reintento del ítem 40
+    (`patch_orchestrator102`) resultó insuficiente en un turno posterior:
+    "mejora ese código y decime qué implementaste" sobre
+    `space_invaders_game.py` terminó de nuevo cortado, esta vez en
+    "Expanded the top interface to display remaining **Lives" (markdown
+    sin cerrar, dato sin completar) -- una explicación más larga y
+    estructurada (varios encabezados y sub-viñetas) que el caso del
+    ítem 40, para la que ni siquiera el doble de presupuesto (250→500
+    vía el reintento) alcanzó. El usuario propuso, en sus palabras:
+    "porque mejor no le damos unos 200 tokenes obligatorios para que se
+    explique, que su explicacion queda en esos 200 tokens a 500 tokens
+    que te parece?" -- es decir, subir el piso BASE de esta pasada en
+    vez de seguir dependiendo de un reintento que paga una llamada
+    extra cada vez que 250 no alcanza.
+
+    Se aceptó la propuesta con un refinamiento: en vez de subir
+    directamente `FOLLOWUP_DECISION_NUM_PREDICT` (que también se usa,
+    sin relación con pedidos de explicación, como techo genérico de
+    "¿sigo o ya está?" cuando NO hubo pedido explícito -- subirlo ahí
+    gastaría de más en el caso común de "confirmación breve de 1-2
+    frases", que ya funciona bien con 250), se agregó una constante
+    NUEVA y separada, `FOLLOWUP_EXPLANATION_NUM_PREDICT = 500` (extremo
+    alto del rango 200-500 que pidió el usuario), que solo se usa
+    cuando `_wants_explicit_explanation` (la misma señal de
+    `_EXPLICIT_EXPLANATION_REQUEST_RE`, ítem 38/`patch_orchestrator100`)
+    es `True` para el turno. Se introdujo una variable local compartida,
+    `_followup_base_num_predict`, calculada una sola vez justo antes de
+    la llamada de cierre (`self.FOLLOWUP_EXPLANATION_NUM_PREDICT if
+    _wants_explicit_explanation else self.FOLLOWUP_DECISION_NUM_PREDICT`)
+    y reutilizada en dos lugares: (1) como techo de la propia pasada de
+    cierre (en el mismo `if (_file_created_this_turn_path and
+    wants_file_tools)` que ya existía desde `patch_orchestrator70`), y
+    (2) como base del reintento del ítem 40, que ahora duplica
+    `_followup_base_num_predict` en vez del `FOLLOWUP_DECISION_NUM_
+    PREDICT` fijo de antes -- así, si el pedido explícito ya arrancó en
+    500, el reintento (poco frecuente ahora) sube a 1000; si no hubo
+    pedido explícito, el comportamiento queda IDÉNTICO al del ítem 40
+    (250→500). El reintento del ítem 40 se mantiene sin más cambios
+    como red de seguridad para el caso, ahora más raro, en que ni
+    siquiera el techo base más grande alcance.
+
+    Verificado en el sandbox: `ast.parse` → `SYNTAX_OK`, `pyflakes` sin
+    warnings nuevos (mismos 6 preexistentes de siempre). Tamaño en el
+    dispositivo confirmado en 1131619 bytes (el mismo baseline exacto
+    del ítem 40) antes de tocar nada. Backup
+    `orchestrator.py.bak88_pre_patch103`. Commit al dispositivo exitoso
+    al primer intento (1131619→1135372 bytes), verificado byte a byte y
+    con `ast.parse` del propio Python del dispositivo. Solo a
+    `MonolitoPersonal`, como desde el ítem 34 -- nunca a
+    `MonolitoPersonal-GitHub`. Pendiente de retest en vivo: repetir un
+    turno de explicación larga/estructurada (idealmente similar al de
+    "Lives" de más arriba) y confirmar que ya no se corta ni con el
+    techo base ni necesita el reintento del ítem 40 para completarse.
+
+42. **`patch_router2` (2026-09-19) — bug real, MEDIDO en vivo por el
+    usuario, con el log completo del turno: sobre una conversación que
+    ya venía editando `agar_io.py` en turnos previos (crear el juego,
+    mejorarlo, agregarle bots agresivos), el turno de seguimiento "add
+    random cool things to the game" disparó una búsqueda web COMPLETA
+    (DuckDuckGo, Wikipedia, e imágenes de tema totalmente ajeno -- una
+    hamburguesa, "search engine optimization") en vez de ir directo a
+    `read_file`/`edit_file` sobre el archivo ya existente. El turno
+    terminó bien igual (el modelo, con el historial de conversación
+    a mano, llamó a `read_file` por su cuenta después de la búsqueda
+    inútil), pero costó tokens/tiempo de más y contaminó el contexto
+    del modelo con resultados irrelevantes -- posiblemente relacionado
+    con el corte `finishReason=MALFORMED_FUNCTION_CALL` que sufrió la
+    generación final de ese mismo turno, aunque eso no se confirmó
+    puntualmente. El usuario, tras ver el log, pidió explícitamente:
+    "tienes que blindar fuertemente ese aspecto porque el usuario se
+    enojara cuando pase eso".
+
+    Causa raíz: `router.py` ya tenía tres ejes de exclusión mutua contra
+    `SignalTag.WEB_SEARCH_INTENT` (`CODE_COMPLEX`,
+    `CONVERSATIONAL_FOLLOWUP`, `SUPERLATIVE_ACHIEVEMENT` -- ver
+    `classify()`), pero ninguno cubría este caso. "game" es una de las
+    `_WEB_KEYWORDS_RE` (pensada para "who won the game"/marcadores
+    deportivos). `_CODE_COMPLEX_PATTERN` exige o un verbo de desarrollo
+    explícito (implementa/mejora/optimiza/...) o el NOMBRE puntual del
+    juego (snake/tetris/agario/...) -- "add ... to the game", sin
+    nombrar el juego ni usar ninguno de esos verbos, no matcheaba nada
+    de esa lista. Mismo patrón de fondo que los BLINDAJEs de "snake/
+    pong/tetris" (2026-09-09) y `patch_router1` (asteroids, 2026-09-18)
+    ya documentados en `router.py` -- pero esos dos se resolvieron
+    agregando el NOMBRE puntual del juego a una lista cerrada, mientras
+    que acá el pedido es genérico a propósito ("cosas geniales",
+    "random cool things") y nunca iba a estar en ninguna lista cerrada
+    de nombres.
+
+    Fix: cuarto eje de neutralización, nuevo `SignalTag.
+    GENERIC_EDIT_CONTINUATION` + `_GENERIC_EDIT_CONTINUATION_RE` en
+    `router.py` -- un verbo de modificación genérico (add/put/include/
+    insert/throw in, o sus equivalentes en español con pronombre
+    enclítico: agrega/agregale/añade/incluye/suma/sumale/inserta/pon/
+    ponle/mete/metele) seguido, a poca distancia (≤40 caracteres), de
+    un objeto que es inequívocamente código/juego ya existente ("to/in/
+    into the game/code/script", "al/en el juego/código/script"). A
+    diferencia de `_CODE_COMPLEX_PATTERN`, este patrón NO requiere
+    nombrar el juego puntual ni un verbo de programación explícito --
+    por diseño, para cubrir justamente el caso genérico que una lista
+    cerrada nunca va a poder enumerar por completo. Evaluado en paralelo
+    a los otros tres ejes en `classify()`, con su propia nota de
+    exclusión en el log (`[WEB_SEARCH_INTENT neutralizado por pedido
+    genérico de edición sobre juego/código ya existente]`) para poder
+    auditarlo después. No se tocó `_CODE_COMPLEX_PATTERN` ni ninguna de
+    las listas de nombres de juego existentes -- señal independiente,
+    sin relación con `SignalTag.CODE_COMPLEX` ni con
+    `_turn_wants_file_tools`/presupuesto de codegen (`orchestrator.py`,
+    ítem 39) -- alcance deliberadamente acotado al síntoma reportado
+    (búsqueda web espuria), no una reingeniería del ruteo de archivos.
+
+    Verificado con una batería de 12 casos en el sandbox antes de tocar
+    el archivo real (frase reportada + variantes en inglés/español +
+    5 negativos control: "add 2 and 3", "who won the game", "what's the
+    score of the game", "add me to the meeting", "agregarme a la
+    reunion" -- los 12 dieron el resultado esperado). `ast.parse` →
+    `SYNTAX_OK`, `pyflakes` sin ningún warning (línea base de
+    `router.py` ya estaba limpia, a diferencia de `orchestrator.py`).
+    Backup `router.py.bak1_pre_patch_router2` (46553 bytes, tamaño
+    preexistente confirmado antes de tocar nada -- este archivo no se
+    había tocado en ninguna sesión previa desde `patch_router1`).
+    Commit al dispositivo exitoso al primer intento (46553→51138
+    bytes), verificado byte a byte y con `ast.parse` del propio Python
+    del dispositivo. Solo a `MonolitoPersonal`, como desde el ítem 34.
+    Pendiente de retest en vivo: repetir un turno de seguimiento
+    genérico similar ("agregale cosas random al juego", "put something
+    fun in the script") sobre un archivo ya existente y confirmar en el
+    log que el turno va directo a `read_file`/`edit_file` sin ningún
+    `[WEB_SEARCH]` de por medio.
+
+43. **`patch_orchestrator104` (2026-09-19) — rediseño arquitectónico
+    pedido explícitamente por el usuario, tras discutir 3 alternativas
+    sobre el mismo bug de fondo de los ítems 41/42 (`patch_router1`/
+    `patch_router2`): "hmm razona otras posibilidades" → se presentaron
+    (1) seguir agregando regex al router (lo que ya se había hecho, y
+    que el usuario correctamente identificó como whack-a-mole: "cada
+    frase nueva que se te ocurra puede volver a fallar"), (2) un candado
+    de estado de sesión usando `_most_recent_workspace_file()` para
+    exigir una señal de actualidad más fuerte cuando hay un archivo
+    tocado hace poco, y (3) convertir la búsqueda web en una herramienta
+    agéntica real que el modelo pide por su cuenta, igual que ya hace
+    con `read_file`/`write_file` -- eliminando la clase de bug de raíz
+    en vez de seguir parcheando síntomas. El usuario eligió la opción 3
+    sin dudar: "la 3 me parece perfecta".
+
+    Causa raíz de fondo (documentada ya en los ítems 41/42, pero nunca
+    resuelta hasta este patch): la búsqueda web NUNCA fue una
+    herramienta agéntica -- vivía enteramente en un pipeline aparte
+    (`_should_force_web_search`/`SignalTag.WEB_SEARCH_INTENT`, ver
+    router.py) que decidía buscar o no ANTES de que el modelo viera el
+    mensaje del usuario, con un router determinista y SIN memoria de la
+    conversación adivinando en su lugar. Interesante nota histórica: la
+    señal `WEB_SEARCH_INTENT` se había sumado a `_should_force_web_
+    search` (ver el docstring de ese método, ahora reescrito) citando un
+    pedido anterior del usuario, del 2026-09-18: "que la IA decida sola
+    cuándo buscar, sin que yo tenga que forzarlo" -- pero la
+    implementación real de aquel momento seguía siendo heurística, nunca
+    el modelo decidiendo de verdad. Este patch por fin cumple ese pedido
+    original de forma literal.
+
+    Investigación previa a tocar código: se descubrió que `tools.py` y
+    `web_search.py` (`src/tools/`) NO estaban mirroreados en el
+    workspace de la nube de esta sesión (solo `orchestrator.py`,
+    `router.py`, `ARCHITECTURE.md` y `sovnode_qt.py` lo estaban) --
+    tuvieron que traerse primero vía `device_stage_files` antes de poder
+    diseñar el cambio con el código real a la vista, en vez de adivinar
+    su contenido.
+
+    Cambios, todos en la MISMA sesión de trabajo:
+    - **`CLOUD_TOOLS_SCHEMA`** (orchestrator.py): nueva entrada
+      `web_search` (7ma herramienta), ubicada DESPUÉS de `list_dir` y
+      ANTES de `run_cmd` -- dentro del prefijo ESTABLE que ningún
+      `exclude_tools` saca nunca (solo `write_file` se excluye alguna
+      vez, ver el BLINDAJE de `patch_orchestrator88`, §5.4) para no
+      correr ningún `cache_control` existente. La descripción instruye
+      explícitamente NO usarla para pedidos de código ("agregale cosas
+      geniales al juego" es SIEMPRE edición, nunca búsqueda) y pedir una
+      consulta concreta y autocontenida (el modelo resuelve pronombres
+      usando la conversación, no un rewriter externo).
+    - **`TOOLS_SCHEMA`** (tools.py): misma entrada, formato local (clave
+      `parameters` en vez de `input_schema`), para que el protocolo
+      JSON-en-texto del motor Local (`extract_tool_call`) también la
+      vea en el dump de schema embebido en el prompt.
+    - **`_get_fastpath_system_prompt`/`_get_file_ops_system_prompt`**
+      (orchestrator.py): nuevo bloque de instrucción + ejemplo JSON para
+      `web_search`, en los dos idiomas, en las dos cabeceras que arma el
+      motor Local -- mismo formato que ya usan los bloques de
+      `write_file`/`read_file`. Al editar `_get_fastpath_system_prompt`
+      se detectó y corrigió un bug de copy-paste propio de este mismo
+      patch (una duplicación accidental del bloque `if self.
+      _workspace_tools_are_enabled(): ...` al insertar el nuevo bloque
+      antes de él) -- verificado que solo queda UNA copia con
+      `grep -c`.
+    - **`execute_tool_from_call`** (orchestrator.py): firma ampliada con
+      `lang`/`log_cb` opcionales (default `None`, cero cambio para
+      cualquier llamador que no los pase); nueva rama `if tool_name ==
+      "web_search": result = self._execute_web_search_tool_call(...)`
+      ANTES del `self.tools.execute(tool_name, **params)` genérico --
+      `web_search` no vive en `LocalToolDispatcher` (no necesita sandbox
+      de disco/comandos). El guardia preexistente `_WEB_SEARCH_TOOL_
+      ALIASES` (pensado para la ÉPOCA en que la búsqueda web NO era una
+      herramienta real, y que de otro modo le diría al modelo "no existe
+      tal herramienta") queda intacto pero inerte para un llamado real:
+      solo dispara sobre `isinstance(result, dict)`, y el resultado de
+      `_execute_web_search_tool_call` siempre es un string.
+    - **`_execute_web_search_tool_call`** (orchestrator.py, método
+      nuevo): reusa `search_web_context` (web_search.py, ya importado a
+      nivel de módulo desde antes) -- a propósito NO reusa
+      `_build_contextual_search_query` (el rewriter de 3 capas que
+      resuelve pronombres/deixis para compensar la falta de contexto del
+      router; acá el llamador YA ES el modelo con la conversación
+      completa en la cabeza, pedirle una consulta autocontenida en el
+      schema alcanza). Nunca lanza ni devuelve un dict -- siempre texto,
+      con mensajes de error claros (falta `query`, sin resultados) que
+      el modelo puede leer y actuar en consecuencia (reformular, o
+      responder con lo que ya sabe aclarando que no pudo confirmarlo).
+    - **`normalize_tool_call`** (orchestrator.py): nuevo bloque `web_
+      search_aliases`, mismo patrón que los 4 bloques de alias
+      preexistentes (`telemetry_aliases`, etc.) -- normaliza sinónimos
+      razonables ("search_web", "buscar", "browse", ...) al nombre
+      canónico `web_search`, para que un modelo Local que no recuerde el
+      nombre exacto igual dispare la herramienta real en vez de caer en
+      el guardia de "alucinación".
+    - **`_should_force_web_search`** (orchestrator.py): se retira
+      `SignalTag.WEB_SEARCH_INTENT` de la condición que fuerza una
+      búsqueda pre-emptiva -- el modelo ya tiene la herramienta real, no
+      hace falta que un router stateless siga adivinando por él, y esa
+      señal era justamente la responsable de la clase de bug de los
+      ítems 41/42. `SignalTag.FACTUAL_ENUMERATION` se MANTIENE forzando
+      a propósito -- BLINDAJE explícito en el docstring reescrito: es un
+      bug estructuralmente DISTINTO (un modelo local chico puede no
+      saber que no sabe un dato mal memorizado -- ningún tool-calling
+      arregla eso, porque el modelo nunca va a pedir ayuda para algo que
+      cree saber bien; la única corrección posible sigue siendo inyectar
+      evidencia externa de antemano, sin esperar a que la pida). El
+      resto del pipeline de búsqueda pre-emptiva (prefetch en paralelo,
+      inyección en el prompt antes de generar, ver §5.4) queda intacto,
+      sin tocarse, para ese caso y para `requested=True` explícito.
+    - `router.py` (`_CODE_COMPLEX_PATTERN`/`_GENERIC_EDIT_CONTINUATION_
+      RE`, ítems 29/42) queda SIN TOCAR -- sigue siendo la señal real
+      que decide fast_path/slow_path y sigue siendo útil, pero deja de
+      ser el único mecanismo intentando adivinar si hace falta buscar.
+
+    Verificado en el sandbox: `ast.parse` → `SYNTAX_OK` en
+    `orchestrator.py` Y `tools.py`; `pyflakes` sin warnings nuevos en
+    ninguno de los dos (orchestrator.py: mismos 6 preexistentes de
+    siempre, con números de línea corridos; tools.py: cero warnings,
+    igual que antes). Se extrajeron `CLOUD_TOOLS_SCHEMA` y `TOOLS_SCHEMA`
+    con `ast.literal_eval` (no solo `ast.parse`) para confirmar
+    programáticamente que las 7 herramientas están, en el orden
+    correcto, con el schema exacto esperado -- no solo que el archivo
+    "parsea", sino que el dato real quedó bien formado. Ambos archivos
+    (`orchestrator.py`, `tools.py`) respaldados en el dispositivo antes
+    de tocarse (`orchestrator.py.bak89_pre_patch104`,
+    `tools.py.bak_pre_patch104`) y commiteados solo a `MonolitoPersonal`,
+    verificados byte a byte y con `ast.parse` del propio Python del
+    dispositivo tras el commit.
+
+    Pendiente de retest en vivo (el más importante de toda esta racha de
+    patches): repetir turnos como "add random cool things to the game"
+    (el bug original de `patch_router2`) y confirmar en el log que el
+    modelo NUNCA dispara `[WEB_SEARCH]` para ellos -- y, por separado,
+    probar un pedido genuino de actualidad ("cuál es el precio del dólar
+    hoy", "quién ganó el partido de anoche") DURANTE una sesión de
+    edición de código activa y confirmar que el modelo SÍ llama a `web_
+    search` por su cuenta cuando corresponde, sin que haga falta ningún
+    botón ni forzado manual -- la prueba real de que "la IA decide sola"
+    dejó de ser una heurística y pasó a ser una decisión agéntica
+    genuina.
+
+44. **`patch_orchestrator105` (2026-09-19) — código incompleto en el
+    carril de chat (herramientas de workspace desactivadas), dos fixes
+    complementarios pedidos explícitamente por el usuario.** Reportado
+    con captura + log: "Give me a base game of slither.io with bots" con
+    las herramientas de workspace DESACTIVADAS devolvió código cortado a
+    mitad de una definición de clase, pese a que el propio modelo
+    afirmaba en su texto que el juego estaba "complete... with full game
+    logic". Pedido textual del usuario: *"porque al generar codigo
+    genera un codigo imcompleto? Hagamos algo, si no puede con el
+    esfuerzo bajo que lo suba a medio para generar el codigo base y si
+    se le pide mejoras a ese codigo que explique detalladamente el
+    codigo que hace y donde introducirlo en el codigo base porque
+    obviamente si se le pide que mejore el codigo sin el workspace va a
+    reescribirlo todo con la mejora y lo que yo quiero es que nos
+    ajustemos a los tokens de salida"*.
+
+    Diagnóstico (investigación, sin reproducir en vivo -- se leyó el
+    código, no se corrió el motor): `run_turn` ya calcula
+    `_min_viable_floor` (`_estimate_min_viable_codegen_tokens`, el mismo
+    piso técnico usado en todo el resto de esta racha de patches,
+    `_MIN_VIABLE_FLOOR_PATTERNS`) para CUALQUIER turno que quiera
+    presupuesto de codegen, carril de chat incluido -- pero el
+    mecanismo que EVALÚA ese piso contra el techo real y eleva de nivel
+    si hace falta (`_elevate_codegen_ceiling_if_needed`, ya en
+    producción desde `patch_orchestrator82/83` para `write_file` de
+    archivo nuevo) estaba condicionado a `if is_file_write and not
+    mod_is_modify:` -- una condición que, con las herramientas de
+    workspace apagadas, es SIEMPRE falsa (`_is_file_write_turn` devuelve
+    `False` de entrada, ver `_turn_wants_file_tools`). El carril de
+    "código en el chat" nunca pasaba por la elevación: con "Bajo"
+    (~900tok) seleccionado, el techo duro real que la API iba a cortar
+    seguía siendo 900tok pase lo que pase -- el bloque `[OUTPUT BUDGET]`
+    (línea ~4057 antes del patch) solo le pedía al modelo por texto que
+    "recorte alcance", pero ningún recorte de alcance salva un techo por
+    debajo del piso técnico mínimo de un juego con bots. El propio
+    comentario BLINDAJE junto a la condición original ya documentaba
+    esta asimetría ("(a) archivo nuevo tenía el chequeo, el carril de
+    chat no") como una decisión consciente de no tocar en su momento --
+    este patch es exactamente esa extensión, ahora pedida explícitamente.
+
+    Fix parte (a) -- elevación extendida al carril de chat: se agregó
+    una rama `elif not is_file_write:` (nunca toca la rama `if
+    is_file_write and not mod_is_modify:` original, que sigue
+    exactamente igual) inmediatamente después de ella, en `run_turn`
+    (`orchestrator.py`, ~línea 3868-4116 tras el patch). Reutiliza
+    literalmente el mismo mecanismo (`_elevate_codegen_ceiling_if_needed`,
+    `_CLOUD_OUTPUT_BUDGET_CENTS_LABELS`, el mismo formato de mensaje
+    `[LOG]` avisando "presupuesto ampliado/elevado solo este turno,
+    selector guardado sin cambios") -- eleva el techo real SOLO cuando
+    "Bajo" no alcanza ni para el piso mínimo de la categoría detectada
+    (juego/script/etc.), nunca de forma incondicional (respeta "que nos
+    ajustemos a los tokens de salida": si el pedido entra en el
+    presupuesto elegido, no se toca nada). Si ni el nivel más alto
+    ("Alto"/"Extra") alcanza, cae en el mismo bailout de
+    `_codegen_budget_infeasible` ya existente (cero tokens de LLM
+    gastados en un intento condenado a cortarse).
+
+    Fix parte (b) -- "explicar y ubicar" en vez de reescribir todo en
+    seguimientos de mejora: se descubrió que este mecanismo YA EXISTÍA
+    en gran parte (`patch_orchestrator37` y refinamientos posteriores,
+    §8 más arriba) -- cuando un turno reinyecta `_last_generated_code_
+    text` (el código generado en la respuesta anterior) y ese código es
+    grande respecto al presupuesto del turno actual (`_suggestion_mode_
+    active`, umbral `_SUGGESTION_SIZE_SAFETY_RATIO = 0.6`), el prompt ya
+    le instruye al modelo explícitamente: "NO reescribas el archivo
+    entero... describí la implementación sugerida... especificá
+    EXACTAMENTE en qué parte del código existente va". El bug real no
+    era la ausencia del mecanismo sino su condición de entrada: todo el
+    bloque (reinyección + evaluación de modo sugerencia) exigía
+    `SignalTag.CODE_COMPLEX in decision.tags` -- la MISMA señal del
+    router que `patch_router2` (ítem 42) ya demostró que NO dispara para
+    un seguimiento genérico como "agrega cosas geniales al juego"
+    (exige un verbo de programación explícito o un juego nombrado por
+    `_CODE_COMPLEX_PATTERN`). Un pedido típico de seguimiento como
+    "mejora este código" / "arreglalo" / "optimizalo" podía caer
+    igual de afuera, dejando al modelo sin el código anterior
+    reinyectado y sin ninguna instrucción de "no reescribas todo" --
+    exactamente el riesgo que el usuario describió ("sin el workspace va
+    a reescribirlo todo"). Fix: se agregó `self._FILE_MODIFY_VERB_RE.
+    search(user_input)` (la misma regex ya probada en producción,
+    usada para `_resolve_modify_target`/`mod_is_modify`) como condición
+    ALTERNATIVA a `SignalTag.CODE_COMPLEX` (con `or`, no reemplazo --
+    ningún turno que ya entraba sigue entrando igual). El umbral de
+    tamaño que decide si `_suggestion_mode_active` se activa (0.6 del
+    presupuesto) no se tocó -- sigue siendo el mismo cálculo ya
+    calibrado; este fix solo asegura que el turno LLEGUE a evaluarlo.
+
+    Verificación: `ast.parse` limpio en ambas ediciones (cloud y
+    dispositivo, `python3` del propio dispositivo). `pyflakes` sobre
+    `orchestrator.py` sigue dando exactamente los mismos 6 warnings
+    preexistentes (líneas corridas por las inserciones, mismo
+    contenido: `rag_faiss.chunk_document` sin usar, redefinición de
+    `requests`, dos f-strings sin placeholders, `Skeleton` indefinido,
+    `wants_file_tools` sin usar) -- cero warnings nuevos. `router.py` y
+    `tools.py` (sin tocar este patch) siguen en cero warnings. Tamaño de
+    `orchestrator.py`: 1151394 → 1160114 bytes (+8720). Backup en
+    dispositivo (`orchestrator.py.pre_patch105.bak`, 1151394 bytes,
+    mismo tamaño que el baseline) antes de commitear, commit solo a
+    `MonolitoPersonal` (nunca `MonolitoPersonal-GitHub`), verificado
+    byte a byte (`wc -c` en dispositivo: 1160114, igual al mirror de la
+    nube) y con `ast.parse` del propio Python del dispositivo tras el
+    commit.
+
+    Pendiente de retest en vivo (ambas partes, con las herramientas de
+    workspace DESACTIVADAS y "Bajo" seleccionado): (a) repetir "Give me
+    a base game of slither.io with bots" y confirmar en el log el
+    mensaje `[BUDGET]`/`[PRESUPUESTO]` mostrando la elevación de "Bajo"
+    a un nivel superior cuando el piso mínimo no entra, y que el código
+    resultante compile/corra completo, sin cortarse a mitad de clase;
+    (b) sobre ESE mismo juego ya generado, pedir un seguimiento genérico
+    tipo "mejora este código" / "agregale más cosas" y confirmar que la
+    respuesta NO reescribe el archivo completo sino que explica la
+    mejora en prosa y especifica exactamente dónde pegarla sobre el
+    código ya mostrado.
+
+45. **`patch_orchestrator106` (2026-09-19) — el modo sugerencia
+    (parte (b) de `patch_orchestrator105`) no se activaba con "Medio"
+    seleccionado, bug real MEDIDO en el primer retest en vivo del
+    usuario.** Contexto: el usuario confirmó que la parte (a) de
+    `patch_orchestrator105` (elevación Bajo→Medio) funcionó bien --
+    "el primer codigo funciono bien" (un juego base tipo Doom, generado
+    completo con Cloud/Gemini y "Medio" ya seleccionado a mano). Pero al
+    pedir un seguimiento ("give me an improve of the code because there
+    is no map"), la respuesta volvió a intentar reescribir el archivo
+    entero (agregando un minimapa) y se cortó a mitad de una línea
+    (`corrected_depth = depth * math.cos(player_angle -`), con el log
+    mostrando `ceiling=4800tok`/`2228tok de salida real` -- es decir, NO
+    fue un corte por techo agotado (2228 < 4800), sino que el modelo
+    dejó de generar a mitad de camino igual. El usuario señaló
+    correctamente que esto contradice el plan ya acordado en
+    `patch_orchestrator105`: *"ya te dije como hibamos a implementar el
+    mejorar codigo cuando se le pida cierto?"*.
+
+    Causa raíz: el mecanismo de modo sugerencia SÍ se alcanzaba
+    (`_last_generated_code_text` se reinyectaba, "improve" matcheó
+    `_FILE_MODIFY_VERB_RE`), pero `_suggestion_mode_active` (la bandera
+    que de verdad le dice al modelo "no reescribas, explicá y ubicá")
+    solo se ponía en `True` si el código anterior era GRANDE respecto al
+    presupuesto de ESTE turno (`_SUGGESTION_SIZE_SAFETY_RATIO=0.6` sobre
+    `_codegen_char_budget_estimate`). Con "Bajo" ese mismo código
+    generado hubiera activado el modo sin problema -- pero con "Medio"
+    (el presupuesto sube) la MISMA cantidad de código deja de verse
+    "grande" en proporción, así que el sistema decidía que una
+    reescritura completa "entraba" en el presupuesto. Resultado:
+    exactamente lo opuesto de lo pedido, y potencialmente PEOR cuanto
+    más alto el tier elegido (más "confianza" del sistema en que puede
+    reescribir todo, más riesgo real de que el modelo igual se corte por
+    las razones de siempre -- longitud real del programa, no solo
+    tokens).
+
+    Fix: en `run_turn` (`orchestrator.py`, bloque `elif` de reinyección
+    de `_last_generated_code_text`, el mismo que `patch_orchestrator105`
+    ya había ampliado con `_FILE_MODIFY_VERB_RE`), se saca la condición
+    de tamaño para este caso -- `_suggestion_mode_active` se activa
+    INCONDICIONALMENTE apenas se entra a esta rama. Razonamiento: la
+    rama ya sólo se alcanza cuando `not is_file_write` (este turno no
+    tiene `write_file`/`edit_file` disponible) Y hay código generado
+    antes que reinyectar Y el pedido suena a mejora -- en ese escenario
+    exacto, cualquier intento de "reescribir todo" significa repetir el
+    programa entero como texto plano de chat, sin importar cuán alto sea
+    el techo de tokens elegido: el riesgo de corte no depende de la
+    proporción código-viejo/presupuesto-nuevo, depende de que no hay
+    ninguna herramienta de archivo para este turno. El bloque `if`
+    hermano (código PEGADO por el usuario, más arriba en la misma
+    función) NO se tocó -- sigue usando el umbral de tamaño de
+    `_SUGGESTION_SIZE_SAFETY_RATIO`, caso distinto que no fue parte de
+    este reporte.
+
+    Verificación: `ast.parse` limpio (cloud + dispositivo). `pyflakes`
+    sigue en los mismos 6 warnings preexistentes, cero nuevos.
+    `orchestrator.py`: 1160114 → 1162505 bytes (+2391). Backup en
+    dispositivo (`orchestrator.py.pre_patch106.bak`, 1160114 bytes,
+    coincide con el baseline post-`patch_orchestrator105`) antes de
+    commitear, commit solo a `MonolitoPersonal`, verificado byte a byte
+    (1162505 en ambos lados) y con `ast.parse` del propio Python del
+    dispositivo tras el commit.
+
+    Pendiente de retest en vivo: repetir un seguimiento de mejora
+    ("agregale un minimapa", "mejora este código") sobre un juego base
+    ya generado en el chat (workspace desactivado), con CUALQUIER tier
+    de presupuesto seleccionado (Bajo, Medio o Alto) -- confirmar que la
+    respuesta ahora explica en prosa qué cambiar y dónde, en vez de
+    reescribir el archivo completo, y que el log del turno refleja
+    `large_generated_code_suggestion_mode` con `unconditional=True`.
+
+46. **`patch_qt73` (2026-09-19) — persistir el idioma elegido en la UI
+    entre sesiones, pedido explícito del usuario: *"añade que el
+    lenguaje se guarde el ultimo que elegiste, es engorroso ser ingles y
+    cambiar a cada rato de idioma"*.** `sovnode_qt.py` (`MainWindow.
+    __init__`) arrancaba SIEMPRE con `self._current_lang = "Español"`
+    hardcodeado, sin importar qué idioma hubiera elegido el usuario la
+    sesión anterior en `self.combo_lang` -- y `_on_lang_changed` (el
+    handler del combo) actualizaba `self._current_lang`/llamaba a
+    `self.orchestrator.set_language(...)` pero nunca persistía nada.
+    Fix: mismo mecanismo ya establecido para otros toggles de la UI
+    (`_on_workspace_tools_toggled`/`_on_run_cmd_toggled`/`_on_advanced_
+    terminal_toggled`, todos vía `QSettings("SovNode", "SovNode")`) --
+    nueva clave `ui/language`. Se guarda en `_on_lang_changed` (único
+    lugar donde el usuario cambia de idioma de verdad) y se lee en
+    `__init__`, reemplazando el literal hardcodeado, con `type=str` +
+    fallback a "Español" (cubre primera corrida sin valor guardado) y un
+    chequeo de membresía contra `("Español", "English")` (cubre un
+    valor corrupto o de otra versión en el Registro). No hizo falta
+    tocar nada más: `self._current_lang` ya se consume tal cual más
+    abajo en `__init__` (`combo_lang.setCurrentText`, `self.orchestrator.
+    set_language`, todos los textos vía `I18N[self._current_lang]`), así
+    que restaurar el valor ahí basta para que se propague solo.
+
+    **Gotcha real, MEDIDO de nuevo en este mismo patch** (ya documentado
+    arriba, ítem "riesgos conocidos" de `device_commit_files`): el
+    PRIMER `device_commit_files` de `sovnode_qt.py` devolvió éxito
+    (`{"written":[...],"rejected":[]}`) pero el archivo en el
+    dispositivo quedó con el contenido VIEJO -- esta vez el chequeo de
+    bytes NO lo detectó (1925 bytes de más, coincidencia: el fix
+    original usaba `patch_qt67` como nombre, que YA estaba en uso en
+    otras 5 BLINDAJE de este mismo archivo para un fix no relacionado de
+    una sesión anterior -- renombrar a `patch_qt73` no cambió el conteo
+    de bytes, mismo largo de string). Se detectó SOLO porque el paso de
+    verificación buscó el marcador de texto `patch_qt73` de por sí (no
+    solo el tamaño) y no lo encontró en el dispositivo pese al byte
+    count coincidiendo -- recordatorio en vivo de por qué el protocolo
+    exige buscar el marcador del parche, no solo el tamaño. Reintentado
+    con `force: true` (como documenta el ítem de arriba), esta vez sí
+    prendió: verificado `grep -c "patch_qt73"` = 2 (los dos bloques
+    agregados) y `grep -c "patch_qt67"` = 5 (los preexistentes, sin
+    tocar) en el dispositivo, más `ast.parse` limpio.
+
+    Aparte, se detectó al investigar que `sovnode_qt.py` YA tiene
+    patches numerados hasta `patch_qt72` (no `patch_qt65`, que era lo
+    último visto/documentado en una revisión anterior de este
+    documento) -- este archivo evolucionó en sesiones intermedias no
+    reflejadas todavía acá. Próxima sesión que toque `sovnode_qt.py`:
+    el próximo número libre es `patch_qt74` en adelante, verificar con
+    `grep -oE "patch_qt[0-9]+" sovnode_qt.py | sed 's/patch_qt//' | sort
+    -n -u | tail` antes de asumir cualquier número.
+
+    Verificación: `ast.parse` limpio (cloud + dispositivo). `pyflakes`
+    sobre `sovnode_qt.py` da UN solo warning preexistente, sin relación
+    con este cambio (`redefinition of unused '_CancelToken' from line
+    3803`, ya presente en el baseline del dispositivo antes de tocar
+    nada) -- cero warnings nuevos. Tamaño: 390628 → 392553 bytes
+    (+1925). Backup en dispositivo (`sovnode_qt.py.pre_patch_qt67.bak`
+    -- nombre de archivo con el número viejo, cambiado de idea después,
+    pero el CONTENIDO es el baseline correcto pre-patch, 390628 bytes,
+    verificado) antes de commitear, commit solo a `MonolitoPersonal`.
+
+    Pendiente de retest en vivo: cambiar el idioma con el selector,
+    cerrar SovNode por completo y volver a abrirlo -- confirmar que
+    arranca en el idioma recién elegido, no en "Español" por defecto.
+
+47. **`patch_orchestrator107` (2026-09-19) — `_dedupe_enumeration_items`
+    cortaba en falso el modo sugerencia de `patch_orchestrator106`, bug
+    real MEDIDO por el usuario en el retest inmediato del ítem 44/45.**
+    Reportado con captura + log: "improve this code" sobre `agar_io.py`
+    (sin workspace) respondió con "three targeted improvements", pero la
+    respuesta visible se cortaba justo al arrancar el ítem 2 ("2.
+    Optimize Collision Calculations...") sin ningún texto debajo -- el
+    log mostró `Duplicate/degenerate enumeration items trimmed.` y el
+    turno terminó "sin problemas" pese a NO haber agotado el techo de
+    tokens (1733tok de 6384tok). El usuario notó que un primer intento
+    (turno anterior, antes de cerrar la conversación) había salido bien.
+
+    Causa raíz: el fix de `patch_orchestrator106` (recién shippeado en
+    este mismo turno) hizo que `_suggestion_mode_active` -- el modo
+    "explicá y ubicá en vez de reescribir" -- se activara SIEMPRE para
+    un seguimiento de mejora sin workspace. Ese modo le pide al modelo
+    estructurar cada mejora con sub-etiquetas repetidas ("**Issue**:",
+    "**Solution**:", "**Exact Location**:", una vez por ítem). Pero
+    `_dedupe_enumeration_items` (blindaje preexistente, ver ítem/BLINDAJE
+    original junto a `_DEGENERATE_REPEAT_RE` -- pensado para un bug
+    real de modelos locales tipo gpt-oss repitiendo el título de UN
+    ítem en bucle sin avanzar) cortaba la respuesta apenas el MISMO
+    texto en negrita-con-dos-puntos aparecía DOS VECES en todo el
+    texto, sin distinguir "el modelo se atascó repitiendo el mismo
+    ítem" (el bug real que motivó este blindaje) de "el modelo avanzó a
+    un ítem nuevo y reusó la misma sub-etiqueta de estructura" (este
+    caso, sano) -- con el modo sugerencia ahora activado por defecto,
+    CUALQUIER explicación de 2+ mejoras con ese formato iba a cortarse
+    siempre en el segundo ítem. Bug preexistente, pero invisible hasta
+    ahora porque antes de `patch_orchestrator106` este modo casi nunca
+    se activaba para más de un ítem seguido.
+
+    Fix: se agregó `_TOP_LEVEL_ITEM_MARKER_RE` (encabezado Markdown
+    `#`-`######`, o el arranque de un ítem numerado/con viñeta) y se
+    exige que, entre la aparición anterior de un título repetido y la
+    actual, haya aparecido al menos UN marcador de ítem nuevo para
+    NO cortar -- si no apareció ninguno (el título se repite sin que
+    haya arrancado nada nuevo en el medio, el patrón real del bug
+    original), corta exactamente igual que antes. Probado con un script
+    standalone: (1) una estructura legítima de 2 ítems con Issue/
+    Solution/Exact Location repetidos -- NO corta, texto idéntico
+    preservado; (2) un bucle degenerativo real (mismo título repetido
+    3 veces SIN ningún marcador de ítem nuevo en el medio) -- corta
+    igual que la versión anterior del método. No se tocó
+    `_DEGENERATE_REPEAT_RE`/`_looks_degenerate_repetition` (mecanismo
+    de bucle a nivel de caracteres, problema distinto).
+
+    Verificación: `ast.parse` limpio (cloud + dispositivo). `pyflakes`
+    sigue en los mismos 6 warnings preexistentes de siempre, cero
+    nuevos. `orchestrator.py`: 1162505 → 1166280 bytes (+3775). Backup
+    en dispositivo (`orchestrator.py.pre_patch107.bak`, 1162505 bytes,
+    coincide con el baseline post-`patch_orchestrator106`) antes de
+    commitear, commit solo a `MonolitoPersonal`, verificado byte a byte
+    Y con el marcador de texto `patch_orchestrator107` (no solo el
+    tamaño -- ver el gotcha de `device_commit_files` documentado más
+    arriba, que en el patch anterior coincidió en bytes con contenido
+    viejo) y `ast.parse` del propio Python del dispositivo tras el
+    commit.
+
+    Pendiente de retest en vivo: repetir "improve this code" (o
+    cualquier seguimiento de mejora genérico) sobre un juego ya
+    generado, sin workspace, y confirmar que TODOS los ítems de la
+    respuesta (no solo el primero) aparecen completos, sin cortarse al
+    empezar el segundo/tercero, y que el log YA NO muestra "Duplicate/
+    degenerate enumeration items trimmed" para este tipo de turno
+    (seguiría apareciendo, correctamente, ante un bucle degenerativo
+    real).
+
+48. **`patch_orchestrator108` (2026-09-19) — recomendar activamente el
+    workspace para seguimientos de mejora/reparación sin archivo real,
+    pedido explícito del usuario tras confirmar que `patch_orchestrator107`
+    funcionó.** El usuario, viendo que las 3 mejoras ya salían completas
+    (screenshot confirmando el fix del ítem 47), probó un seguimiento
+    AMBIGUO sobre esa misma respuesta ("i want to implement the 3rd
+    point, how i do it?") -- sin repetir "mejora"/"fix"/etc. y sin
+    workspace, el modelo intentó `run_cmd` dos veces sin avanzar
+    ("Bucle de herramientas: 'run_cmd' se repitió sin avanzar --
+    abortando") y terminó pidiéndole al usuario que reformule. El
+    usuario propuso la solución él mismo: *"mejor implementa una via en
+    donde siempre que se quiera mejorar, reparar, o modificar se
+    sugiera guardarlo y encender el workspace y poner la carpeta donde
+    esta dicho codigo para empezar a analizarlo y modificarlo"* --
+    razonando correctamente que seguir estirando el modo sugerencia
+    (explicar+ubicar en texto) tiene un techo real: en algún punto el
+    usuario tiene que copiar/pegar código a mano turno tras turno, y un
+    seguimiento ambiguo sobre ESE texto puede hacer que el modelo
+    improvise con la única herramienta que tenga a mano (acá, `run_cmd`
+    sin `write_file`/`edit_file`) en vez de simplemente re-explicar.
+
+    Dos piezas, ambas en `orchestrator.py`:
+
+    (a) **`_FILE_MODIFY_VERB_RE` no cubría "implement"**: el turno real
+    que disparó el reporte ("i want to implement the 3rd point") no
+    matcheaba ningún verbo de la lista -- ni `mod_is_modify` ni el
+    bloque de reinyección de `_last_generated_code_text`
+    (`patch_orchestrator105`/`106`) se activaban, así que el modelo ni
+    siquiera tenía el código anterior en contexto para ese turno. Se
+    agregó `implement\w*` a la lista (una sola raíz cubre inglés
+    "implement/implementing/implementation" Y español "implementa/
+    implementar/implementación", mismo prefijo compartido).
+
+    (b) **Recomendación determinística de activar el workspace**: el
+    aviso que ya existía en el system prompt (`_workspace_tools_block_
+    en/es`, ítem previo de este documento) -- "mention once that the
+    user can enable workspace tools" -- es una instrucción SUAVE que
+    depende de que el modelo decida seguirla; el propio log de este
+    reporte demuestra que NO se puede confiar en eso justo cuando más
+    hace falta (el modelo optó por `run_cmd` en bucle en vez de
+    sugerir nada). Se agregó `_build_workspace_upsell_tip(lang)`
+    (nuevo método, cerca de `_build_suggestion_mode_note`) y se la
+    engancha en `run_turn` INMEDIATAMENTE después de `_verify_and_fix_
+    python_syntax` (el punto de convergencia final de cualquier turno
+    antes de mostrarse) y antes de capturar `_last_generated_code_text`:
+    si el turno activó modo sugerencia (`_suggestion_mode_active`) Y el
+    workspace sigue apagado, se APÉNDICE texto fijo al final de
+    `final_response` -- no un `[SYSTEM NOTE: ...]` (ese formato es para
+    instruir al modelo en el prompt de ENTRADA), sino texto plano que
+    el usuario lee, recomendando activar herramientas de archivo, decir
+    la carpeta, y pedir que el código se guarde ahí para que los
+    próximos seguimientos se resuelvan con `edit_file` real. Al ser
+    determinístico (código, no una instrucción que el modelo puede
+    ignorar), aparece SIEMPRE que corresponde, sin depender de qué tan
+    cooperativo esté el modelo ese turno en particular -- exactamente
+    lo que el usuario pidió con "siempre que se quiera mejorar, reparar,
+    o modificar se sugiera".
+
+    No se tocó el aviso suave preexistente en `_workspace_tools_block_
+    en/es` (sigue ahí, como refuerzo adicional para turnos que ni
+    siquiera llegan a modo sugerencia) ni ninguna otra parte del
+    pipeline de tool-calling (`run_cmd` sigue funcionando igual para lo
+    que sí sabe hacer).
+
+    Verificación: `ast.parse` limpio (cloud + dispositivo). `pyflakes`
+    sigue en los mismos 6 warnings preexistentes, cero nuevos. Probado
+    con un script standalone que la nueva raíz `implement\w*` matchea
+    "i want to implement the 3rd point" y variantes en español, sin
+    romper los casos negativos de control ya probados en
+    `patch_orchestrator92`. `orchestrator.py`: 1166280 → 1172140 bytes
+    (+5860). Backup en dispositivo (`orchestrator.py.pre_patch108.bak`,
+    1166280 bytes, coincide con el baseline post-`patch_orchestrator107`)
+    antes de commitear, commit solo a `MonolitoPersonal`, verificado
+    byte a byte Y con el marcador `patch_orchestrator108` (3 apariciones)
+    y `ast.parse` del propio Python del dispositivo tras el commit --
+    primer intento de `device_commit_files` sí prendió esta vez (sin
+    necesidad de `force: true`).
+
+    Pendiente de retest en vivo: repetir un seguimiento de mejora sin
+    workspace (cualquier verbo, incluido "implement"/"implementa") sobre
+    un código ya mostrado, y confirmar que la respuesta termina con la
+    recomendación de activar el workspace -- y, aparte, confirmar que
+    "i want to implement the [N] point" específicamente ya NO cae en el
+    bucle de `run_cmd` sino que reinyecta el código anterior y explica/
+    ubica el cambio en prosa como cualquier otro seguimiento de mejora.
+
+49. **`patch_orchestrator109` (2026-09-19) — dejar de forzar el motor
+    Local para terminar un `write_file`/`edit_file` cortado cuando Cloud
+    está activo, pedido explícito del usuario tras un turno real medido
+    ("Create an mario game in the workspace", workspace ON, Cloud/
+    Gemini activo).** La pasada de Cloud completó en ~28s (normal) pero
+    pegó contra el presupuesto de Sonnet por turno a mitad de
+    `write_file`; el rescate que ya existía (`_continue_truncated_file_
+    write_locally`, `patch_orchestrator43`-`60`) forzó el motor Local a
+    propósito (`force_local=True`, "termina gratis") -- y en el hardware
+    real del usuario (GPU no soportada por ROCm en Windows, Ollama en
+    CPU) esa "mitad gratis" tardó más de 150 SEGUNDOS sin terminar. El
+    usuario tuvo que detener la generación a mano: *"se demoro mas de
+    150 segundos, lo detuve porque no quiero por esa razon
+    estrictamente que se vaya a usar el modelo local, deberiamos
+    eliminar eso la verdad, arruina la experiencia al demorarse
+    mucho."*
+
+    Esto revierte, a propósito, el pedido explícito ANTERIOR del mismo
+    usuario (2026-09-15, ver el docstring de `_continue_truncated_file_
+    write_locally`) que motivó construir este mecanismo en primer
+    lugar: "pagar una segunda pasada completa en Cloud ... gasta el
+    doble del presupuesto elegido -- el resto se termina gratis [en
+    Local]". Ambos pedidos son legítimos, pero apuntan a hardware
+    distinto -- en el hardware real del usuario, terminar "gratis" en
+    Local no es gratis: cuesta minutos de espera con el turno colgado,
+    mucho peor que la fracción de centavo extra que cuesta terminarlo
+    en Cloud (15-30s medidos en la misma sesión, en llamadas de Cloud
+    de este mismo turno). El pedido más reciente pesa más que el
+    anterior: la prioridad pasa a ser VELOCIDAD sobre el ahorro
+    marginal de esa segunda pasada.
+
+    Un solo cambio central en `orchestrator.py`: nuevo método
+    `_codegen_rescue_should_force_local()` (justo antes de
+    `_continue_truncated_file_write_locally`) que devuelve `False`
+    (no forzar Local) cuando Cloud está activo y configurado
+    (`cloud_backend_enabled` + `cloud_api_key`, los mismos flags de
+    sesión que ya usa el resto del archivo, ej. `_reported_model_used`)
+    y `True` (comportamiento original, sin otra opción real) cuando no
+    lo está. Reemplazados los 4 sitios reales de `force_local=True`
+    (los únicos que de verdad se invocan hoy -- ver abajo) por
+    `force_local=self._codegen_rescue_should_force_local()`:
+    - `_continue_truncated_file_write_locally`: `LocalTargetedUpdate`
+      (actualización dirigida sobre un archivo existente),
+      `LocalFreshWrite` (archivo nuevo desde cero), `LocalContinuation`
+      (continuar el `content` ya cortado a mitad).
+    - `_rescue_truncated_edit_file_locally`: `LocalEditFileRescue`
+      (rehacer un `edit_file` cortado desde cero).
+
+    Como los 4 sitios reales solo se alcanzan hoy desde ramas de
+    `run_turn` donde `_cloud_active`/`_cloud_active_inloop` ya es
+    `True` (confirmado por grep de todos los call sites), el efecto
+    práctico es simple: esas 4 llamadas de rescate pasan de "siempre
+    Local" a "siempre Cloud" mientras Cloud esté prendido. Se
+    actualizaron los 4 mensajes `[LOG]` correspondientes en `run_turn`
+    (dos variantes -- antes y dentro del bucle de herramientas -- para
+    `write_file` y `edit_file` cada una) de "finishing the file locally
+    (Ollama, no extra API cost)" a "finishing the file with a second
+    Cloud pass (fast) instead of waiting on the local engine" (y su
+    equivalente en español), para que el mensaje visible coincida con
+    lo que de verdad va a pasar.
+
+    **NO se tocó** `_continue_truncated_chat_code_locally` (su propio
+    `force_local=True`, `perf_label="LocalChatContinuation"`) -- ese
+    método está `RETENIDO SIN INVOCAR` desde `patch_orchestrator43`
+    (pedido explícito del usuario, 2026-09-16, "elimina completamente
+    ese mecanismo de continuación local" para el lane de chat sin
+    archivo) y no tiene ningún call site real (confirmado por grep);
+    tocar código muerto no cambia nada en runtime y solo agrega riesgo.
+    Tampoco se tocaron los otros dos `force_local=True` del archivo
+    (`Router0.5B` ~línea 13783, `VerifyLite` ~línea 19584): son modelos
+    livianos de clasificación/corrección que se fuerzan a Local A
+    PROPÓSITO por diseño (nunca pasaron por Cloud, no son parte de este
+    mecanismo de rescate de codegen truncado).
+
+    Se implementó como chequeo explícito de `cloud_backend_enabled`/
+    `cloud_api_key` (no una constante `False` fija) para seguir
+    protegiendo a un usuario SIN Cloud configurado -- ese caso sigue
+    terminando gratis en Local exactamente como antes, sin cambios.
+
+    Verificación: `ast.parse` limpio (cloud + dispositivo). `pyflakes`
+    sigue en los mismos 6 warnings preexistentes, cero nuevos.
+    `orchestrator.py`: 1172140 → 1176234 bytes (+4094). Backup en
+    dispositivo (`orchestrator.py.pre_patch109.bak`, 1172140 bytes,
+    coincide con el baseline post-`patch_orchestrator108`) antes de
+    commitear, commit solo a `MonolitoPersonal`, verificado byte a
+    byte Y con los marcadores `_codegen_rescue_should_force_local`
+    (7 apariciones) y `patch_orchestrator109` (3 apariciones) y
+    `ast.parse` del propio Python del dispositivo tras el commit --
+    primer intento de `device_commit_files` sí prendió esta vez (sin
+    necesidad de `force: true`).
+
+    Pendiente de retest en vivo: repetir el turno real que disparó el
+    reporte ("crear un juego en el workspace" con Cloud activo y un
+    presupuesto de Sonnet bajo, para forzar el mismo corte a mitad de
+    `write_file`) y confirmar que el rescate ahora completa en
+    segundos (vía Cloud) en vez de colgarse 150+ segundos en Local --
+    el log visible debería decir "finishing the file with a second
+    Cloud pass" en vez de mencionar Ollama/Local.
+
+50. **`patch_orchestrator110` (2026-09-19) — cortar el bucle de
+    `read_file` repetido cuando el guardia de archivos sintetiza una
+    llamada para un seguimiento de mejora sobre un archivo que ya se
+    había leído en el mismo turno, bug real reportado con captura +
+    log en vivo justo después de confirmar `patch_orchestrator109`.**
+    Turno real: "improve the graphics of the game" sobre `mario.py`
+    (ya existente, con mejoras de un turno anterior). Traza medida:
+
+    1. Pasada 1: el modelo llama `read_file` de verdad (97 tok salida) --
+       normal, lee el archivo antes de tocar nada.
+    2. Pasada 2: el modelo NO emite ninguna llamada. El guardia
+       (`File-op guard`) sintetiza `read_file` DE NUEVO.
+    3. Pasada 3: se repite exactamente lo mismo -- el guardia sintetiza
+       `read_file` una tercera vez.
+    4. Con 3 `read_file` seguidos se dispara `MAX_CONSECUTIVE_SAME_
+       TOOL_CALLS` (=2) y el bucle aborta: *"'read_file' se repitió sin
+       avanzar — abortando."*
+    5. El rescate final repite la misma lógica dos veces más ("leyendo
+       el archivo actual primero") sin éxito, y el turno termina en
+       "podrías reformular" sin haber intentado escribir el cambio ni
+       una sola vez -- pese a que el archivo YA se había leído en la
+       pasada 1.
+
+    Causa raíz, `_salvage_file_operation` (orchestrator.py, ~línea
+    13710 antes de este patch): la rama "es una modificación sobre un
+    archivo que ya existe -> leerlo primero" no tenía forma de saber
+    si ESE archivo ya se había leído en una pasada anterior del mismo
+    turno -- como `target_exists` no cambia entre pasadas y el modelo
+    seguía sin producir código real, la condición volvía a ser
+    verdadera en cada pasada, así que el "rescate" caía siempre en
+    "leer de nuevo" en un bucle sin salida, sin nunca llegar a la rama
+    de regeneración real que ya existía unas líneas más abajo (la que
+    de verdad genera un `write_file`).
+
+    Tres cambios, todos en `orchestrator.py`:
+
+    (a) **Registro de rutas ya leídas en el turno**: nuevo set
+    `_paths_read_this_turn` (declarado junto a `_modify_target_current_
+    content`, antes del primer llamado a `_salvage_file_operation`),
+    poblado cada vez que un `read_file` real se ejecuta con éxito
+    dentro del bucle de herramientas (mismo punto donde ya se detecta
+    un `read_file` exitoso para fijar `_modify_target_current_content`
+    -- se separó esa condición en dos, una que registra SIEMPRE la
+    ruta leída y otra que solo fija el contenido de referencia la
+    PRIMERA vez, como antes). Se pasa como `already_read_paths` a los
+    dos llamados existentes de `_salvage_file_operation` (antes del
+    bucle y dentro de él).
+
+    (b) **`_salvage_file_operation` ya no repite `read_file` sobre una
+    ruta ya leída**: la rama de "modificación sobre archivo existente"
+    ahora chequea `already_read_paths` -- si el archivo objetivo ya
+    está ahí, en vez de devolver otro `read_file` sigue de largo hacia
+    la regeneración real (con un log distinto: "ya se leyó en este
+    turno — generando el cambio directamente"). El último fallback de
+    la función (cuando ni siquiera la regeneración produjo código
+    usable) también respeta esto -- si el archivo ya se leyó, se rinde
+    limpio (`None, None`) en vez de insistir con otro `read_file`.
+
+    (c) **La regeneración para un archivo existente ahora preserva su
+    contenido real**: antes, `_build_codegen_salvage_prompt` armaba
+    siempre el mismo prompt de "escribí el archivo completo" a partir
+    SOLO del pedido del usuario -- si esa rama llegaba a ejecutarse
+    para un archivo YA existente (algo que antes de este patch nunca
+    pasaba, por el bug de (b)), habría reescrito el archivo desde cero
+    sin ver su contenido real, arriesgando perder cualquier mejora de
+    turnos anteriores. Se le agregó un parámetro opcional
+    `existing_content` (mismo patrón que `_targeted_update_prompt` de
+    `_continue_truncated_file_write_locally`, patch_orchestrator43-60):
+    cuando el archivo existe, el prompt ahora dice explícitamente "NO
+    reescribas desde cero, aplicá el cambio pedido sobre el contenido
+    real, todo lo demás queda EXACTAMENTE igual". Se pasa siempre que
+    `target_exists`, no solo en el caso del bug de (b) -- cualquier
+    regeneración futura sobre un archivo existente se beneficia de
+    esto.
+
+    Verificación: `ast.parse` limpio (cloud + dispositivo). `pyflakes`
+    sigue en los mismos 6 warnings preexistentes, cero nuevos.
+    `orchestrator.py`: 1176234 → 1185311 bytes (+9077). Backup en
+    dispositivo (`orchestrator.py.pre_patch110.bak`, 1176234 bytes,
+    coincide con el baseline post-`patch_orchestrator109`) antes de
+    commitear, commit solo a `MonolitoPersonal`, verificado byte a
+    byte Y con los marcadores `patch_orchestrator110` (6 apariciones)
+    y `_paths_read_this_turn` (6 apariciones) y `ast.parse` del propio
+    Python del dispositivo tras el commit -- primer intento de
+    `device_commit_files` sí prendió esta vez (sin necesidad de
+    `force: true`).
+
+    Pendiente de retest en vivo: repetir un seguimiento de mejora
+    sobre un archivo que el modelo ya leyó en el mismo turno (ej.
+    "improve the graphics of the game" después de un `read_file` real)
+    y confirmar que, si el modelo se queda mudo en una pasada
+    siguiente, el guardia ya NO repite `read_file` -- en vez de eso
+    debería verse "ya se leyó en este turno — generando el cambio
+    directamente" en el log, seguido de un `write_file` real con el
+    cambio aplicado sobre el contenido existente (no un archivo
+    reescrito desde cero).
+
+51. **`patch_orchestrator111` (2026-09-19) — dos bugs reportados juntos,
+    con capturas + log en vivo, sobre el turno "explain the mario code
+    of the workspace" (Cloud/Gemini activo, workspace ON, presupuesto
+    "Bajo").** Pedido textual: *"necesito que arregle eso que no se vea
+    el pensamiento al empesarse a generar y que el analisis siempre
+    quede por debajo de el techo de el esfuerzo, lo de que pueda subir
+    a medium es solo cuando se pide crear un archivo desde 0 y de ves
+    en cuando cuando se busca y se edita un archivo porque si no
+    entonces para que esta."*
+
+    **(a) El "pensamiento" interno de Gemini se mostraba como si fuera
+    la respuesta real.** La captura mostraba, ANTES de la respuesta de
+    verdad, un texto suelto tipo `"Allocation burned: 0 out of 5426
+    budget tokens (~0%"` renderizado como si fuera parte de la
+    conversación. Causa raíz, `_call_gemini_api_raw` y `_stream_gemini_
+    api_raw` (orchestrator.py): Gemini 3.x tiene "thinking" activado
+    por defecto, y la API devuelve el razonamiento interno del modelo
+    como partes NORMALES del `content` con una clave `"text"` -- solo
+    distinguibles de la respuesta real por un flag aparte, `"thought":
+    true`, en el mismo objeto `part`. El código armaba `raw_text`
+    (variante no-streaming) y hacía `yield` de cada chunk en vivo
+    (variante streaming) uniendo TODA parte con `"text"`, sin chequear
+    ese flag -- así que el razonamiento interno del modelo (en este
+    caso, literalmente narrando su propia contabilidad de presupuesto
+    de tokens) se colaba en la respuesta visible, y en el modo
+    streaming aparecía primero en pantalla (el pensamiento típicamente
+    se genera antes que la respuesta final). Fix: en ambas funciones,
+    cualquier `part` con `thought` verdadero se descarta antes de
+    sumarlo a `raw_text`/hacer `yield` -- la respuesta visible real
+    vive en las partes sin ese flag. No se tocó ninguna configuración
+    de `thinkingConfig` (dejar el thinking activado en el lado de la
+    API, pero nunca exponerlo, es el cambio mínimo y más seguro; apagar
+    el thinking del todo podría degradar la calidad de turnos
+    complejos, y eso no fue lo que se pidió).
+
+    **(b) La elevación de presupuesto de `patch_orchestrator105` se
+    disparaba también para turnos de puro análisis/explicación.** El
+    mismo turno, con "Bajo" elegido a propósito, terminó con `[LOG]
+    Budget auto-raised... bumping to 'Medio'` pese a no ir a escribir
+    ni una línea de código (el turno terminó en `list_dir` + `read_
+    file` + una explicación en prosa). Causa raíz: la rama `elif not
+    is_file_write:` de `patch_orchestrator105` (pensada para el carril
+    de "código en el chat", ej. "Give me a base game of slither.io with
+    bots" con workspace APAGADO) no distinguía ese caso de un pedido de
+    LECTURA/ANÁLISIS con workspace ENCENDIDO -- ambos comparten
+    `is_file_write=False`, y el router había taggeado el turno como
+    `SignalTag.CODE_COMPLEX` (por mencionar "mario code"), así que
+    `_wants_codegen_budget` daba `True` para los dos por igual. Dos
+    cambios:
+
+    - Se agregó `explic\w*|explain\w*` a `_FILE_READ_VERB_RE` -- "explain"/
+      "explica" faltaba de esa lista, así que `_is_file_read_turn`
+      (que exige un verbo de lectura + sin intención de escritura + con
+      herramientas de workspace activas) daba `False` para "explain the
+      mario code..." pese a ser un pedido de lectura de manual de
+      libro.
+    - La condición de la rama pasó de `elif not is_file_write:` a `elif
+      not is_file_write and not self._is_file_read_turn(user_input,
+      decision):` -- si el turno es claramente de lectura/análisis, la
+      elevación entera se salta y `gen_predict` se queda en lo que el
+      selector guardado del usuario ya daba, sin subir de nivel en
+      silencio. El caso motivador ORIGINAL de patch_orchestrator105
+      sigue intacto: con workspace apagado, `_is_file_read_turn` da
+      `False` de entrada (exige `_turn_wants_file_tools`, que a su vez
+      exige herramientas de workspace activas), así que "Give me a base
+      game..." sigue elevando exactamente igual que antes.
+
+    No se tocó la rama `if is_file_write and not mod_is_modify:`
+    (creación de archivo nuevo, sigue elevando sin condición nueva, tal
+    como pidió el usuario) ni se agregó ninguna elevación nueva para el
+    caso de editar un archivo existente (`is_file_write and mod_is_
+    modify`) -- el usuario mencionó ese caso como aceptable "de vez en
+    cuando", no como algo roto que haya que arreglar ahora; sigue
+    exactamente igual que antes de este patch (capado en 5120tok, sin
+    elevación).
+
+    Verificación: `ast.parse` limpio (cloud + dispositivo). `pyflakes`
+    sigue en los mismos 6 warnings preexistentes, cero nuevos. Test
+    standalone de la regex confirmando que `_FILE_READ_VERB_RE` ahora
+    matchea "explain the mario code of the workspace"/"explica el
+    codigo de mario" y sigue SIN matchear turnos de escritura/mejora
+    ("improve the graphics...", "create a mario game...", "fix the
+    errors..."). `orchestrator.py`: 1185311 → 1190206 bytes (+4895).
+    Backup en dispositivo (`orchestrator.py.pre_patch111.bak`, 1185311
+    bytes, coincide con el baseline post-`patch_orchestrator110`) antes
+    de commitear, commit solo a `MonolitoPersonal`, verificado byte a
+    byte Y con el marcador `patch_orchestrator111` (4 apariciones) y
+    `ast.parse` del propio Python del dispositivo tras el commit --
+    primer intento de `device_commit_files` sí prendió esta vez (sin
+    necesidad de `force: true`).
+
+    Pendiente de retest en vivo: (1) repetir un turno de explicación/
+    análisis sobre un archivo del workspace (ej. "explain the mario
+    code of the workspace", o "explica que hace este archivo") con
+    Cloud/Gemini activo y confirmar que YA NO aparece ningún texto de
+    razonamiento interno ("Allocation burned...", o similar) antes de
+    la respuesta real, y que el log YA NO muestra "Budget auto-raised"
+    para ese turno -- el presupuesto debería quedarse en el nivel que
+    el usuario tiene guardado. (2) Confirmar que un pedido real de
+    código nuevo con workspace apagado (ej. "Give me a base game of
+    slither.io with bots") SIGUE elevando el presupuesto igual que
+    antes, para asegurar que patch_orchestrator105 no se rompió.
+
+52. **`patch_qt74` + `patch_bat1` (2026-09-20) — auditoría completa del
+    proyecto antes de subirlo a GitHub, pedido explícito del usuario
+    ("y ahora que errores tiene la estructura actual? se puede subir a
+    github ya?").** Se corrió `ast.parse` + `pyflakes` sobre los 45
+    archivos `.py` reales del proyecto (excluyendo `sovnode_patch/`,
+    `_to_delete/`, `_backups/`, `Claude outputs/`, `build/`, `dist/`,
+    `workspace/` -- carpetas de trabajo interno o generadas, nunca
+    parte del código fuente real). Resultado: **cero errores de
+    sintaxis** en los 45 archivos. 15 avisos de `pyflakes` en total, 6
+    ya catalogados de antes en `orchestrator.py` (ver notas de sesiones
+    previas -- inofensivos, sin cambios), y 9 nuevos, todos cosméticos
+    salvo uno:
+
+    - `sovnode_log_viewer.py`, `workspace_watcher.py`: imports sin usar
+      (`os`, `time`) -- inofensivo, no se tocó.
+    - `web_search.py`: un `global _LAST_SEARCH_ERROR` que nunca se
+      asigna en ese scope -- inofensivo, no se tocó.
+    - `icons.py`: variable local `mid_h` sin usar -- inofensivo, no se
+      tocó.
+    - `test_regressions.py`: 4 imports de test scripts viejos
+      (`_inspect37`, `_fsyn41`, `_KNode52`, `pipeline.PipelineEvent`)
+      sin usar -- inofensivo, no se tocó (tocar `test_regressions.py`
+      fuera de agregar una sección nueva no está en el alcance de esta
+      sesión).
+    - **`sovnode_qt.py`: DOS definiciones seguidas de la clase
+      `_CancelToken`** (línea 3803 y 3811 antes de este patch) -- la
+      segunda pisaba en silencio a la primera (mismo comportamiento en
+      la práctica, pero código muerto duplicado sin ninguna razón real
+      para existir, probablemente un resto de un merge/parche de una
+      sesión anterior). Único hallazgo con algo real que limpiar --
+      se eliminó la primera definición, dejando solo la que tiene
+      docstring. `sovnode_qt.py`: 392553 → 393055 bytes (+502).
+
+    **Revisión de la estructura para GitHub**: `MonolitoPersonal` en sí
+    NO es (ni debe ser) un repo git -- el flujo establecido usa `Crear
+    carpeta limpia para GitHub.bat` (raíz del proyecto) para generar
+    `MonolitoPersonal-GitHub`, una copia descartable y limpia, vía
+    `robocopy` con exclusiones (`_backups`, `_to_delete`, `sovnode_
+    patch`, `Claude outputs`, `build`, `dist`, `__pycache__`, cualquier
+    `*.bak*`, DBs/logs/índices `.faiss`/`.wal`, y vacía el `workspace`
+    del sandbox dejando un `.gitkeep`), generando además un `.gitignore`
+    a juego en el destino y un escaneo final de API keys sueltas en
+    texto plano. El script está bien diseñado y ya cubre todo el
+    desorden acumulado esta sesión (201 archivos `.bak*`, ~140MB en
+    total, principalmente backups de `orchestrator.py` de cada patch --
+    todos correctamente excluidos por el patrón `*.bak*`, no requieren
+    limpieza manual antes de subir, aunque sí valdría la pena borrarlos
+    del disco en algún momento por prolijidad). Confirmado con un
+    escaneo propio (`grep` sobre exactamente los mismos archivos que el
+    `.bat` terminaría copiando) que no hay ninguna clave con forma de
+    API key (ni formato Anthropic `sk-ant-...` ni Google/Gemini
+    `AIzaSy...`) en ningún archivo que vaya a parar al repo -- las keys
+    reales viven en el Registro de Windows vía `QSettings("SovNode",
+    "SovNode")` (`cloud/api_key_anthropic`, `cloud/api_key_gemini`),
+    nunca en un archivo del proyecto.
+
+    **Único gap real encontrado en el `.bat`**: su escaneo final de
+    seguridad (`findstr`) solo buscaba el patrón de Anthropic (`sk-
+    ant-...`) -- quedó desactualizado desde que la app sumó soporte
+    para Gemini (Google) como proveedor de Cloud (el proveedor
+    ACTIVO en la sesión de pruebas de este mismo documento), cuyas
+    keys tienen un formato totalmente distinto (`AIzaSy...`). Si
+    alguna vez una key de Gemini terminara, por accidente, en un
+    archivo de texto plano, este escaneo NO la hubiera detectado. Fix
+    (`patch_bat1`): se agregó un segundo `findstr` con el patrón
+    `AIzaSy[A-Za-z0-9_-]` (mismo estilo/rigor que el chequeo existente
+    de Anthropic -- no es una validación estricta de formato completo,
+    es un canario de seguridad), y se actualizaron los mensajes para
+    mencionar ambos proveedores. `Crear carpeta limpia para GitHub.bat`:
+    7503 → 8381 bytes (+878).
+
+    Tamaño real de lo que efectivamente se copiaría al repo (los 45
+    `.py` + `README.md` + `ARCHITECTURE.md`): ~3.1MB -- un tamaño de
+    repo perfectamente razonable, nada que optimizar ahí.
+
+    **Veredicto para el usuario**: sí, se puede subir a GitHub ya --
+    cero errores de sintaxis, el único hallazgo real (código duplicado
+    en `sovnode_qt.py`) ya está limpio, no hay ninguna clave filtrada
+    en lo que se subiría, y el script de exportación ya cubre
+    correctamente todo el desorden de backups/carpetas internas
+    acumulado durante esta sesión de debugging. Recomendación: correr
+    `Crear carpeta limpia para GitHub.bat` de nuevo (para regenerar
+    `MonolitoPersonal-GitHub` con el fix del escaneo de keys) antes del
+    primer `git push`.
+
+    Verificación: `ast.parse` + `pyflakes` limpios (cloud + dispositivo)
+    en ambos archivos tocados. Backups en dispositivo
+    (`sovnode_qt.py.pre_patch_qt74.bak`, 392553 bytes; `Crear carpeta
+    limpia para GitHub.bat.pre_patch_bat1.bak`, 7503 bytes) antes de
+    commitear, commit solo a `MonolitoPersonal`, verificados byte a
+    byte Y con marcador de texto (`patch_qt74` / `AIzaSy` +
+    `patch_bat1`) tras cada commit -- ambos primeros intentos de
+    `device_commit_files` prendieron sin necesidad de `force: true`.
+
+53. **`patch_bat2` (2026-09-20) — el usuario pidió explícitamente
+    "agregar en el .gitignore los archivos relacionados a la memoria de
+    sovnode"; más la primera actualización del `README.md` con capturas
+    reales del proyecto (gifs nuevos agregados por el usuario en
+    `docs/`).**
+
+    Los archivos de "memoria" de SovNode (identificados recorriendo
+    `memory_graph.py`, `wal.py` y `rag_faiss.py`, y confirmando en el
+    disco del usuario que existen hoy en la raíz del proyecto) son:
+    `sovnode_memory.db` (`MemoryGraph`, historial + grafo de memoria,
+    SQLite -- default `db_path="sovnode_memory.db"`), `sovnode.wal`
+    (`WriteAheadLog`, JSONL append-only -- default
+    `log_path="sovnode.wal"`), `sovnode_debug.log`, y los índices
+    vectoriales `workspace_vector_index.faiss` /
+    `workspace_vector_index.meta.json` +
+    `longterm_vector_index.faiss` / `longterm_vector_index.meta.json`
+    (`LocalVectorRAG.save`, ambos junto a `sovnode_memory.db` porque
+    `self._rag_persist_dir = self.memory_graph.db_path.resolve().parent`
+    en `orchestrator.py`). En la práctica, el `.gitignore` que genera
+    `Crear carpeta limpia para GitHub.bat` YA excluía los cinco por
+    patrón genérico de extensión (`*.db`, `*.wal`, `*.faiss`,
+    `*.meta.json`, `*.log`) desde antes de esta sesión -- no había un
+    bug de fuga real. Aun así, a pedido del usuario, se agregó una
+    sección nueva y explícita "Memoria / RAG de SovNode" en el bloque
+    que genera el `.gitignore`, listando los cinco nombres reales de
+    archivo uno por uno (`sovnode_memory.db` + sus variantes
+    `-journal`/`-shm`/`-wal`, `sovnode.wal`, `sovnode_debug.log`,
+    `workspace_vector_index.*`, `longterm_vector_index.*`), además de
+    (no en lugar de) los patrones genéricos que ya estaban. Doble
+    cobertura intencional: los patrones genéricos siguen protegiendo si
+    el nombre interno cambia algún día, y el listado explícito deja
+    claro con solo mirar el `.gitignore` generado cuáles archivos son
+    "memoria" del usuario y no código fuente. `Crear carpeta limpia para
+    GitHub.bat`: 8381 → 9798 bytes (+1417).
+
+    **Actualización del README (`docs/`)**: el usuario agregó dos gifs
+    nuevos a `docs/` (`Sovnode UI showcase.gif`, 1,393,275 bytes;
+    `Sovnode improving mario code.gif`, 4,558,011 bytes) además de los
+    dos ya usados en el README (`showcaseSovnode1.gif`,
+    `showcaseSovnode2.gif`). Se revisaron los cuatro (`device_stage_
+    files` + `Read`; nota: el `Read` de un `.gif` solo renderiza el
+    primer frame estático, no la animación completa -- suficiente para
+    confirmar que cada archivo corresponde a lo que su nombre indica,
+    no para juzgar el contenido animado en sí). Se agregaron los dos
+    nuevos a la sección "🖼 Demo" del `README.md`, intercalados con los
+    existentes en un orden narrativo (tour general de la UI → chat en
+    vivo → edición real de código en el workspace → consola/telemetría),
+    sin tocar el resto del documento. Los `src` de los dos gifs nuevos
+    llevan el espacio de sus nombres de archivo percent-encoded
+    (`%20`) porque son atributos de URL, no solo de HTML -- un espacio
+    literal en un `<img src>` funciona en la mayoría de navegadores pero
+    no es válido como URL; `%20` es la forma correcta y funciona en todos
+    los renderers (GitHub incluido). `README.md`: 9526 → 9963 bytes
+    (+437).
+
+    **Nota para el usuario, todavía sin resolver, NO tocada en este
+    patch**: todo el `README.md` (incluido el badge "data: 100% local"
+    y frases como "nothing is ever sent to a cloud server" / "No cloud
+    calls for inference" en la sección "🔒 Privacy & Security")
+    describe a SovNode como exclusivamente 100% offline -- pero la app
+    tiene, y esta misma sesión probó extensivamente, un motor Cloud
+    real (Gemini/Anthropic) que el usuario activa desde el selector
+    "GENERATION ENGINE" de la UI. Es una decisión de posicionamiento
+    del producto, no un bug, así que no se cambió unilateralmente --
+    pero vale la pena que el usuario decida si el README debería
+    mencionar el modo Cloud como opcional (ej. "100% local por
+    defecto, con un motor Cloud opcional") antes de subir el repo,
+    para que no quede una discrepancia entre lo que dice el README y
+    lo que ve cualquiera que abra la app.
+
+    Verificación: backups en dispositivo (`Crear carpeta limpia para
+    GitHub.bat.pre_patch_bat2.bak`, 8381 bytes; `README.md.pre_readme_
+    gifs.bak`, 9526 bytes) antes de commitear, commit solo a
+    `MonolitoPersonal`, verificados byte a byte Y con marcador de texto
+    (`patch_bat2` / 5 apariciones de `sovnode_memory.db` en el `.bat`;
+    `Sovnode%20UI%20showcase` / `Sovnode%20improving%20mario%20code` /
+    5 `img src` en el README) tras cada commit. El commit del `.bat`
+    necesitó `force: true` en el primer intento (mismo patrón ya
+    documentado arriba: el archivo en disco coincidía exactamente en
+    tamaño con la base esperada, confirmado por `device_bash` antes de
+    forzar -- no había edición más nueva del usuario de por medio, solo
+    que este archivo no se había vuelto a stagear en esta sesión y por
+    lo tanto no había un `expectedMtimeMs` real para pasar); el del
+    README también se hizo directamente con `force: true` por el mismo
+    motivo.
 
 ## 9. Variables de entorno relevantes
 

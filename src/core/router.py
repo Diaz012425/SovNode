@@ -50,6 +50,9 @@ class SignalTag(str, Enum):
     WEB_SEARCH_INTENT = "web_search_intent"
     CONVERSATIONAL_FOLLOWUP = "conversational_followup"
     FORMULA_DISCOVERY = "formula_discovery"
+    # BLINDAJE (2026-09-19, patch_router2): ver `_GENERIC_EDIT_CONTINUATION_RE`
+    # más abajo -- cuarto eje de neutralización de WEB_SEARCH_INTENT.
+    GENERIC_EDIT_CONTINUATION = "generic_edit_continuation"
 
 
 @dataclass(frozen=True)
@@ -407,7 +410,25 @@ class IntentRouter:
         # cuenta como "obviamente código", en vez de mantener dos
         # vocabularios que pueden divergir.
         r"flappy\w*|game\s+code|estructura\s+de\s+datos|arquitectura\s+de\s+software|"
-        r"snake|tetris|pong|pac-?man|breakout|arkanoid|2048"
+        r"snake|tetris|pong|pac-?man|breakout|arkanoid|2048|"
+        # BLINDAJE (2026-09-18, patch_router1 -- bug real, MEDIDO: "create
+        # a playable asteroids with a ship, shooting, and score in the
+        # workspace" disparó una búsqueda web completa sobre "asteroids"
+        # -- Wikipedia devolvió "List of Google Easter eggs"/"Space
+        # Invaders", ninguna fuente relacionada -- en vez de neutralizar
+        # WEB_SEARCH_INTENT como debería cualquier pedido de creación de
+        # juego, exactamente el mismo patrón de bug que el BLINDAJE de
+        # arriba (snake/pong/tetris, 2026-09-09). Causa: esta lista es un
+        # ESPEJO manual de `Orchestrator._RUNNABLE_PROGRAM_NOUN_RE`/
+        # `_WRITE_ARTIFACT_NOUN` (orchestrator.py) -- el comentario de
+        # arriba ya lo advierte ("dos vocabularios que pueden divergir")
+        # -- pero `patch_orchestrator91` (mismo día, sesión anterior)
+        # sumó doom/agario/mario/minecraft/buscaminas/ajedrez/asteroids/
+        # invaders SOLO en orchestrator.py y se olvidó de espejarlo acá.
+        # Se copia la misma lista literal, en el mismo orden, para que
+        # las dos dejen de divergir otra vez.
+        r"doom|agario|agar\.?io|mario|minecraft|buscaminas|minesweeper|"
+        r"ajedrez|chess|asteroids?|asteroides|invaders?|invasores"
         r")\b",
         re.IGNORECASE,
     )
@@ -574,6 +595,58 @@ class IntentRouter:
         re.IGNORECASE,
     )
 
+    # BLINDAJE (2026-09-19, patch_router2 -- bug real, MEDIDO en vivo por
+    # el usuario, video/logs completos: turno "add random cool things to
+    # the game" (seguimiento directo sobre `agar_io.py`, ya escrito y
+    # editado en turnos PREVIOS de la MISMA sesión) disparó una búsqueda
+    # web completa -- DuckDuckGo, Wikipedia, e imágenes de tema TOTALMENTE
+    # ajeno (una hamburguesa, "search engine optimization") -- en vez de
+    # ir directo a `read_file`/`edit_file` sobre el archivo ya existente.
+    # Causa raíz: "game" es una de las `_WEB_KEYWORDS_RE` (pensada para
+    # "who won the game"/marcadores deportivos, categoría 5 de arriba), y
+    # NINGUNO de los tres ejes de neutralización que ya existían cubría
+    # este caso: `_CODE_COMPLEX_PATTERN` exige o un verbo de desarrollo
+    # explícito (implementa/mejora/optimiza/...) o el NOMBRE puntual del
+    # juego (snake/tetris/agario/...) -- "add ... to the game", sin
+    # nombrar el juego ni usar ninguno de esos verbos, no matcheaba nada
+    # de esa lista; CONVERSATIONAL_FOLLOWUP y SUPERLATIVE_ACHIEVEMENT
+    # tampoco aplican, no son pedidos de "contame más" ni de "el mayor
+    # logro de la historia". El usuario, tras revisar el log completo en
+    # vivo, pidió explícitamente blindar esto: "tienes que blindar
+    # fuertemente ese aspecto porque el usuario se enojara cuando pase
+    # eso".
+    #
+    # Fix: cuarto eje de neutralización, mismo criterio ESTRUCTURAL que
+    # los tres anteriores (CODE_COMPLEX / CONVERSATIONAL_FOLLOWUP /
+    # SUPERLATIVE_ACHIEVEMENT ya usan esto, ver la nota de arriba y
+    # `classify()` más abajo) -- un verbo de modificación genérico
+    # (add/put/include/insert/throw in, o sus equivalentes en español:
+    # agrega/añade/incluye/suma/inserta/pon, con sus formas con
+    # pronombre enclítico: agregale/ponle/sumale/metele) seguido, a poca
+    # distancia, de un objeto que es inequívocamente código/juego YA
+    # EXISTENTE ("to/in(to) the game/code/script", "al/en el juego/
+    # código/script") es un pedido de EDICIÓN sobre algo que ya está en
+    # el workspace -- nunca una pregunta sobre resultados deportivos o
+    # actualidad, sin importar que contenga la palabra suelta "game". A
+    # diferencia de CODE_COMPLEX, este patrón NO requiere nombrar el
+    # juego puntual ni un verbo de programación explícito -- por diseño,
+    # para cubrir justamente el caso genérico ("cosas geniales", "random
+    # stuff", "algo divertido") que una lista cerrada de nombres de
+    # juego/verbos de programación nunca va a poder enumerar por
+    # completo. No se toca `_CODE_COMPLEX_PATTERN` ni las listas de
+    # nombres de juego que ya mantiene (y que router.py/orchestrator.py
+    # ya espejan entre sí, ver patch_router1) -- esta es una señal
+    # INDEPENDIENTE, evaluada en paralelo, igual que las otras tres.
+    _GENERIC_EDIT_CONTINUATION_RE: Pattern[str] = re.compile(
+        r"\b(?:add\w*|throw\s+in|include\w*|insert\w*|put\w*|"
+        r"agrega\w*|a[ñn]ad\w*|incluye\w*|suma\w*|inserta\w*|"
+        r"met[eé]\w*|pon\w*)\b"
+        r".{0,40}?"
+        r"\b(?:to|in|into|al?|en)\b\s*(?:the\s+|el\s+|la\s+)?"
+        r"(?:game|code|script|juego|c[oó]digo)\b",
+        re.IGNORECASE,
+    )
+
     def check_web_intent(self, text: str) -> bool:
         """Detecta consultas probablemente dependientes de actualidad."""
         return bool(self._WEB_KEYWORDS_RE.search(text))
@@ -582,6 +655,12 @@ class IntentRouter:
         """True si el texto pregunta por el mayor logro/hito histórico en
         sentido de IMPORTANCIA, no de actualidad — ver BLINDAJE arriba."""
         return bool(self._SUPERLATIVE_ACHIEVEMENT_RE.search(text))
+
+    def _detect_generic_edit_continuation(self, text: str) -> bool:
+        """True si el texto es un pedido genérico de agregar/incluir algo
+        a "el juego"/"el código"/"el script" ya existente -- ver el
+        BLINDAJE de `_GENERIC_EDIT_CONTINUATION_RE` arriba."""
+        return bool(self._GENERIC_EDIT_CONTINUATION_RE.search(text))
 
     def _detect_code_complex(self, stripped: str, lowered: str) -> bool:
         """
@@ -785,11 +864,20 @@ class IntentRouter:
         # up in the wording.
         stem_reasoning_detected = math_detected or conceptual_dense_detected
 
+        # BLINDAJE (patch_router2, ver `_GENERIC_EDIT_CONTINUATION_RE`
+        # arriba): cuarto eje de neutralización, mismo criterio que los
+        # tres anteriores -- "add random cool things to the game" no
+        # nombra el juego ni usa un verbo de `_CODE_COMPLEX_PATTERN`,
+        # pero sí es, inequívocamente, un pedido de edición sobre algo
+        # ya existente en el workspace.
+        generic_edit_continuation_detected = self._detect_generic_edit_continuation(stripped)
+
         if (
             not code_complex_detected
             and not conversational_followup_detected
             and not superlative_achievement_detected
             and not stem_reasoning_detected
+            and not generic_edit_continuation_detected
             and self.check_web_intent(stripped)
         ):
             tags.append(SignalTag.WEB_SEARCH_INTENT)
@@ -823,6 +911,8 @@ class IntentRouter:
             exclusion_note = " [WEB_SEARCH_INTENT neutralizado por superlativo de importancia histórica, no actualidad]"
         elif stem_reasoning_detected and self.check_web_intent(stripped):
             exclusion_note = " [WEB_SEARCH_INTENT neutralizado por matemática/razonamiento conceptual denso]"
+        elif generic_edit_continuation_detected and self.check_web_intent(stripped):
+            exclusion_note = " [WEB_SEARCH_INTENT neutralizado por pedido genérico de edición sobre juego/código ya existente]"
         else:
             exclusion_note = ""
 
