@@ -70,7 +70,7 @@ Most AI assistants ask you to trust a company with your prompts, your files, and
 
 <p align="center">
   <img src="docs/showcaseSovnode1.gif" width="800" alt="SovNode Interface Demo">
-  <br><em>Streaming chat, routing, and tool calls</em>
+  <br><em>Creating in the Workspace</em>
 </p>
 
 <br>
@@ -84,7 +84,7 @@ Most AI assistants ask you to trust a company with your prompts, your files, and
 
 <p align="center">
   <img src="docs/showcaseSovnode2.gif" width="800" alt="SovNode Terminal Telemetry Demo">
-  <br><em>Live system console / telemetry</em>
+  <br><em>Analizing using the Workspace</em>
 </p>
 
 ## 🚀 Getting Started
